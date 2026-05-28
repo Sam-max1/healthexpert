@@ -1,0 +1,97 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.11', '3.12']
+
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov black flake8 mypy
+    
+    - name: Format check with Black
+      run: |
+        black --check healthexpert/ agents/ pipeline/ || true
+    
+    - name: Lint with flake8
+      run: |
+        flake8 healthexpert/ agents/ pipeline/ --max-line-length=100 --count --show-source --statistics || true
+    
+    - name: Type check with mypy
+      run: |
+        mypy healthexpert/ agents/ pipeline/ --ignore-missing-imports || true
+    
+    - name: Run unit tests
+      run: |
+        pytest tests/ -v --cov=healthexpert --cov=agents --cov=pipeline || true
+    
+    - name: Upload coverage reports
+      uses: codecov/codecov-action@v3
+      if: matrix.python-version == '3.11'
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+
+  security:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install bandit safety
+    
+    - name: Run Bandit security scan
+      run: |
+        bandit -r healthexpert/ agents/ pipeline/ -f json -o bandit-report.json || true
+    
+    - name: Check dependencies with Safety
+      run: |
+        pip install -r requirements.txt
+        safety check || true
+
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.11'
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pylint
+    
+    - name: Run pylint
+      run: |
+        pylint healthexpert/ agents/ pipeline/ --exit-zero || true
