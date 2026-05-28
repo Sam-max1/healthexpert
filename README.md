@@ -409,7 +409,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👨‍💻 Author
 
-**Sourav Das** (sdas@live.com)
+**Samiran Das** (sdas@live.com)
 
 <div align="center">
 
