@@ -46,7 +46,7 @@ Community leaders are responsible for enforcing this Code of Conduct. We take vi
 
 If you experience or witness unacceptable behavior, please report it by:
 
-- **Email**: sdas@live.com
+- **LinkedIn DM**: [Sam-max1](https://www.linkedin.com/in/sam-max1)
 - **Private message**: Via GitHub issues (private note)
 - **In person**: Contact a community leader directly
 

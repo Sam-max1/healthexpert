@@ -6,7 +6,7 @@
 [![Flask](https://img.shields.io/badge/Flask-3.0%2B-green?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![CrewAI](https://img.shields.io/badge/CrewAI-0.36%2B-orange?logo=robot&logoColor=white)](https://crewai.com/)
 [![License](https://img.shields.io/badge/License-MIT-purple)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](https://github.com/sdas/healthexpert)
+[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](https://github.com/Sam-max1/healthexpert)
 
 **AI-Powered Hybrid RAG Document Analysis System**
 
@@ -134,7 +134,7 @@ User sees answer with source citations
 #### 1. Clone Repository
 
 ```bash
-git clone https://github.com/sdas/healthexpert.git
+git clone https://github.com/Sam-max1/healthexpert.git
 cd healthexpert
 ```
 
@@ -409,7 +409,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 👨‍💻 Author
 
-**Samiran Das** (sdas@live.com)
+**Sam-max1**
 
 <div align="center">
 
@@ -432,8 +432,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📞 Support
 
-- **Issues**: [GitHub Issues](https://github.com/sdas/healthexpert/issues)
-- **Email**: sdas@live.com
+- **Issues**: [GitHub Issues](https://github.com/Sam-max1/healthexpert/issues)
+- **LinkedIn DM**: [Sam-max1](https://www.linkedin.com/in/sam-max1)
 - **Documentation**: See [HEALTHEXPERT_ARCHITECTURE_DESIGN.md](HEALTHEXPERT_ARCHITECTURE_DESIGN.md)
 
 ---
