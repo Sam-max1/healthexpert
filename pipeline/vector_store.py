@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid, sys, os
 import weaviate
 import weaviate.classes.config as wv_config
-from weaviate.classes.query import MetadataQuery
+from weaviate.classes.query import MetadataQuery, Filter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
@@ -128,7 +128,7 @@ def delete_document(source_name: str) -> int:
     client = _get_client()
     col = client.collections.get(config.WEAVIATE_CLASS)
     res = col.query.fetch_objects(
-        filters=wv_config.Filter.by_property("source").equal(source_name)
+        filters=Filter.by_property("source").equal(source_name)
     )
     deleted = 0
     for obj in res.objects:
@@ -140,3 +140,11 @@ def count() -> int:
     client = _get_client()
     col = client.collections.get(config.WEAVIATE_CLASS)
     return len(list(col.iterator()))
+
+def purge() -> None:
+    """Wipe the entire collection from Weaviate."""
+    client = _get_client()
+    if client.collections.exists(config.WEAVIATE_CLASS):
+        client.collections.delete(config.WEAVIATE_CLASS)
+    global _client
+    _client = None
