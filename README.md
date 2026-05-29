@@ -23,7 +23,7 @@
 **HealthExpert** is an enterprise-grade AI document analysis platform combining:
 
 - **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
-- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB) + Graph DB (Neo4j) for comprehensive retrieval
+- **🔍 Hybrid RAG Architecture**: Vector DB (Weaviate) + Graph DB (Neo4j) for comprehensive retrieval
 - **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
 - **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
 - **🌐 Web UI**: Real-time streaming responses with source citations
@@ -74,7 +74,7 @@
 │Processing│ │Qwen3-8B    │ │ BAAI/bge-m3  │
 └────┬────┘ └───────────┘ └──────────────┘
      │
-     ├─→ ChromaDB (Vector Store)
+     ├─→ Weaviate (Vector Store)
      └─→ Neo4j (Graph DB)
 ```
 
@@ -90,7 +90,7 @@ User Upload
 [Embedder] → Generate dense/sparse embeddings (BAAI/bge-m3)
     ↓
 ┌─────────────────────────────────────────┐
-│ [ChromaDB] Vector Store                 │
+│ [Weaviate] Vector Store                 │
 │ Stores: chunks + embeddings + metadata  │
 └─────────────────────────────────────────┘
     ↓
@@ -233,7 +233,7 @@ healthexpert/
 │   ├── document_loader.py                   # Multi-format document loader
 │   ├── chunker.py                           # Text chunking (512 tokens)
 │   ├── embedder.py                          # Embedding HTTP client
-│   ├── vector_store.py                      # ChromaDB integration
+│   ├── vector_store.py                      # Weaviate integration
 │   └── graph_store.py                       # Neo4j integration
 │
 ├── templates/                               # Web UI (HTML)
@@ -244,7 +244,7 @@ healthexpert/
 │   └── style.css                            # UI styling
 │
 └── data/                                    # Runtime data
-    ├── chroma_db/                           # ChromaDB persistence
+    ├── security.key                         # Fernet key (local-only)
     └── uploads/                             # Uploaded documents
 ```
 
@@ -267,9 +267,10 @@ EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_BATCH_SIZE=12
 EMBEDDING_TIMEOUT=120
 
-# ChromaDB
-CHROMA_PERSIST_DIR=./data/chroma_db
-CHROMA_COLLECTION=documents
+# Weaviate
+WEAVIATE_URL=http://127.0.0.1:8080
+WEAVIATE_CLASS=Document
+ENCRYPTION_KEY_FILE=./data/security.key
 
 # Neo4j
 NEO4J_URI=bolt://localhost:7687
@@ -423,7 +424,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [CrewAI](https://crewai.com/) - Multi-agent framework
 - [LangChain](https://langchain.com/) - LLM orchestration
-- [ChromaDB](https://chroma.ai/) - Vector database
+- [Weaviate](https://weaviate.io/) - Vector database
 - [Neo4j](https://neo4j.com/) - Graph database
 - [Qwen](https://qwenlm.github.io/) - LLM models
 - [BAAI BGE](https://github.com/FlagOpen/FlagEmbedding) - Embedding models

@@ -125,6 +125,7 @@ dmypy.json
 # HealthExpert specific
 uploads/
 data/chroma_db/
+data/security.key
 *.db
 *.sqlite
 .DS_Store

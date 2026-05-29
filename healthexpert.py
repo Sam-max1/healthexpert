@@ -62,7 +62,7 @@ def cmd_status() -> None:
     print(f"  LLM Endpoint : {config.LLM_BASE_URL}")
     print(f"  LLM Model    : {config.LLM_MODEL_ID}")
     print(f"  Embedding    : {config.EMBEDDING_MODEL} ({config.EMBEDDING_DEVICE})")
-    print(f"  Vector DB    : {vector_store.count()} chunks  [{config.CHROMA_PERSIST_DIR}]")
+    print(f"  Vector DB    : {vector_store.count()} chunks  [{config.WEAVIATE_URL}]")
     g = graph_store.get_stats()
     if g.get("available"):
         print(f"  Graph DB     : {g['nodes']} nodes, {g['relationships']} relationships")

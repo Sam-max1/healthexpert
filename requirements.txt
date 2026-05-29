@@ -24,7 +24,8 @@ langchain-text-splitters>=0.3.0
 pydantic>=2.0.0
 
 # Vector Database
-chromadb>=0.5.0
+weaviate-client>=4.5.4
+cryptography>=41.0.0
 
 # Graph Database
 neo4j>=5.18.0

@@ -15,7 +15,7 @@
 | CUDA | Available |
 | transformers | 4.57.3 |
 | Flask | 3.x |
-| ChromaDB | 0.5+ |
+| Weaviate | 0.5+ |
 | Neo4j | 5.18-community (Docker) |
 
 ---

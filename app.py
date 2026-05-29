@@ -1,3 +1,5 @@
+# app.py - healthexpert UI
+
 """Document AI Expert — Flask Application."""
 from __future__ import annotations
 import os, uuid, json, threading, subprocess, logging
@@ -19,7 +21,6 @@ app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH
 os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(config.CHROMA_PERSIST_DIR, exist_ok=True)
 
 # In-memory job tracker for async ingestion
 _jobs: dict[str, dict] = {}
@@ -93,13 +94,13 @@ def status():
         gen_ok = r.status_code == 200
         if gen_ok:
             gen_info = r.json()
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Gen LLM status check failed: %s", e)
     try:
         r = req.get(f"{config.EMBED_BASE_URL}/health", timeout=3)
         embed_ok = r.status_code == 200
-    except Exception:
-        pass
+    except Exception as e:
+        log.warning("Embed LLM status check failed: %s", e)
 
     return jsonify({
         "vector_db":  {"status": "ok", "chunks": vec_count},
@@ -229,11 +230,11 @@ def ingest():
                 log.info("Job %s: %s embedded", job_id, orig_name)
 
                 # Step 4: store in vector DB
-                step_log.append(f"[{orig_name}] Storing in ChromaDB (tier: {tier})…")
+                step_log.append(f"[{orig_name}] Storing in Weaviate (tier: {tier})…")
                 doc_id  = uuid.uuid4().hex[:8]
                 added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier)
                 step_log.append(f"[{orig_name}] Stored {added} chunks in vector DB (doc_id={doc_id}).")
-                log.info("Job %s: %s stored %d chunks in ChromaDB", job_id, orig_name, added)
+                log.info("Job %s: %s stored %d chunks in Weaviate", job_id, orig_name, added)
 
                 # Step 5: entity extraction → graph
                 if graph_store.is_available():
@@ -276,6 +277,14 @@ def ingest():
                     "file": orig_name, "ok": False,
                     "result": str(exc), "log": step_log,
                 })
+            finally:
+                if os.path.exists(path):
+                    try:
+                        os.remove(path)
+                        log.info("Deleted local upload file: %s", path)
+                    except OSError as e:
+                        log.warning("Failed to delete %s: %s", path, e)
+                        
             _jobs[job_id]["log"].extend(step_log)
         _jobs[job_id]["status"] = "done"
         log.info("Job %s complete — %d results", job_id,
@@ -405,4 +414,4 @@ if __name__ == "__main__":
     print(f"  Embed LLM: {config.EMBED_EMBEDDINGS_URL}  [{config.EMBEDDING_MODEL}]")
     print(f"  Neo4j:     {config.NEO4J_URI}")
     print("=" * 60)
-    app.run(host="127.0.0.1", port=5050, debug=True, threaded=True)
+    app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)

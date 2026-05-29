@@ -35,7 +35,7 @@ graph TB
     end
 
     subgraph Stores["Knowledge Stores"]
-        O[(ChromaDB\nVector Store\nTier: Foundation / Extended)]
+        O[(Weaviate\nVector Store\nTier: Foundation / Extended)]
         P[(Neo4j\nGraph DB\nTier: Foundation / Extended)]
     end
 
@@ -75,7 +75,7 @@ sequenceDiagram
     participant CH as Chunker
     participant EM as embedder.py (HTTP client)
     participant ES as embed_llm.py :8003
-    participant VDB as ChromaDB
+    participant VDB as Weaviate
     participant GS as gen_llm.py :8002
     participant GDB as Neo4j
 
@@ -220,7 +220,7 @@ sequenceDiagram
 | Crew | `agents/crew.py` | Phase 1 (KV Cache), Phase 2 (Gatekeeper), Phase 3 (Analyst) |
 | Document Loader | `pipeline/document_loader.py` | Parse 9 file formats; OCR for images |
 | Chunker | `pipeline/chunker.py` | Recursive splitting (langchain_text_splitters 1.x), flat chunk dicts |
-| Vector Store | `pipeline/vector_store.py` | ChromaDB CRUD, cosine similarity, tier support |
+| Vector Store | `pipeline/vector_store.py` | Weaviate CRUD, cosine similarity, tier support |
 | Graph Store | `pipeline/graph_store.py` | Neo4j CRUD, OPTIONAL MATCH, tier support |
 | Flask App | `app.py` | REST API + Docker control + Tier Access Admin Auth + KV trigger + Health Metrics |
 | CLI | `healthexpert.py` | Standalone command-line interface |
@@ -242,7 +242,7 @@ sequenceDiagram
 | LLM Model | Qwen/Qwen3-8B | — | 8B params, 131K context, dual thinking/standard mode |
 | Embedding Backend | FlagEmbedding | — | BGEM3FlagModel, fp16 |
 | Embedding Model | BAAI/bge-m3 | — | 1024-dim dense + sparse + ColBERT |
-| Vector Database | ChromaDB | 0.5+ | Persistent, cosine similarity, no server needed |
+| Vector Database | Weaviate | 0.5+ | Persistent, cosine similarity, no server needed |
 | Graph Database | Neo4j Community | 5.18 | APOC plugins, multi-hop traversal |
 | PDF | PyMuPDF (fitz) | 1.24+ | Fast, accurate text extraction |
 | DOCX | python-docx | 1.1+ | Paragraph-level extraction |
@@ -324,7 +324,7 @@ If you want the highest possible reasoning performance in a compact footprint, Q
 ### 🗂️ Ingestor Agent
 - **Role**: Document Ingestion Specialist
 - **Tools**: `IngestDocumentTool`, `ExtractAndStoreEntitiesTool`
-- **Process**: Load → Chunk → Embed (via port 8003) → Store (ChromaDB) → Extract entities (via port 8002) → Store graph (Neo4j)
+- **Process**: Load → Chunk → Embed (via port 8003) → Store (Weaviate) → Extract entities (via port 8002) → Store graph (Neo4j)
 
 ### 🔍 Retriever Agent
 - **Status**: Replaced by KV Cache Inference fallback logic.
@@ -434,7 +434,7 @@ healthexpert/
 │   ├── document_loader.py    Multi-format document parser
 │   ├── chunker.py            Text splitting
 │   ├── embedder.py           HTTP client → port 8003
-│   ├── vector_store.py       ChromaDB wrapper
+│   ├── vector_store.py       Weaviate wrapper
 │   └── graph_store.py        Neo4j wrapper
 │
 ├── templates/
@@ -446,5 +446,5 @@ healthexpert/
 │
 ├── uploads/                  Temporary file storage
 └── data/
-    └── chroma_db/            ChromaDB persistent store
+    └── weaviate_data/            Weaviate persistent store
 ```
