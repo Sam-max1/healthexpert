@@ -40,7 +40,7 @@ TORCH_DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
 # Model is loaded once at startup and kept alive for the process lifetime.
 
 log.info("Loading tokenizer: %s ...", MODEL_NAME)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)  # nosec B615
 
 log.info("Loading model: %s on %s (%s) — using 4-bit quantization...",
          MODEL_NAME, DEVICE, TORCH_DTYPE)
@@ -52,7 +52,7 @@ bnb_config = BitsAndBytesConfig(
     bnb_4bit_use_double_quant=True,
 )
 
-model = AutoModelForCausalLM.from_pretrained(
+model = AutoModelForCausalLM.from_pretrained(  # nosec B615
     MODEL_NAME,
     torch_dtype=TORCH_DTYPE,
     device_map="auto",

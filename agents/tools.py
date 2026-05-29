@@ -77,7 +77,7 @@ def vector_search(query: str) -> str:
     """
     try:
         q_emb   = embedder.embed_query(query)
-        results = vector_store.query(q_emb, top_k=config.TOP_K_VECTOR)
+        results = vector_store.query(q_emb, top_k=config.TOP_K_VECTOR, keyword=query)
         if not results:
             return "No relevant documents found in vector store."
         passages = []

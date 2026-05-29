@@ -25,10 +25,10 @@ EMBEDDING_MODEL       = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 EMBEDDING_BATCH_SIZE  = int(os.getenv("EMBEDDING_BATCH_SIZE", "12"))
 EMBEDDING_TIMEOUT     = int(os.getenv("EMBEDDING_TIMEOUT",   "120"))
 
-# ── ChromaDB ─────────────────────────────────────────────────────────────────
-CHROMA_PERSIST_DIR    = os.getenv("CHROMA_PERSIST_DIR",
-                                   str(BASE_DIR / "data" / "chroma_db"))
-CHROMA_COLLECTION     = os.getenv("CHROMA_COLLECTION", "documents")
+# ── Weaviate & Security ──────────────────────────────────────────────────────
+WEAVIATE_URL          = os.getenv("WEAVIATE_URL", "http://127.0.0.1:8080")
+WEAVIATE_CLASS        = os.getenv("WEAVIATE_CLASS", "Document")
+ENCRYPTION_KEY_FILE   = os.getenv("ENCRYPTION_KEY_FILE", str(BASE_DIR / "data" / "security.key"))
 
 # ── Neo4j ────────────────────────────────────────────────────────────────────
 NEO4J_URI             = os.getenv("NEO4J_URI", "bolt://localhost:7687")

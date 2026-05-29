@@ -46,8 +46,8 @@ def _init_schema():
         for q in queries:
             try:
                 s.run(q)
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[GraphStore] Error cleaning up {source_name}: {e}")
 
 
 def is_available() -> bool:
