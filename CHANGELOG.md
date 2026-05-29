@@ -4,6 +4,13 @@ All notable changes to HealthExpert are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.1] - 2026-05-29
+
+### Changed
+
+- Updated GitHub-facing release artifacts and version references to 1.0.1.
+- Refreshed reported issue template guidance to reflect the new release tag.
+
 ## [1.0.0] - 2024-05-28
 
 ### Added
@@ -11,7 +18,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 #### Core Features
 - ✨ **Multi-Agent RAG System**: Ingestor, Comprehensive Reader, Gatekeeper, and Analyst agents
 - 📄 **Multi-Format Document Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files with OCR
-- 🗄️ **Hybrid Retrieval**: Vector DB (ChromaDB) + Graph DB (Neo4j) for comprehensive document search
+- 🗄️ **Hybrid Retrieval**: Vector DB (Weaviate) + Graph DB (Neo4j) for comprehensive document search
 - 🤖 **CrewAI Integration**: Production-ready agent orchestration framework
 - 🌐 **Web UI**: Drag-and-drop ingestion, real-time streaming queries, source citations
 - ⚡ **Microservice Architecture**: Dedicated LLM generation and embedding servers
@@ -62,7 +69,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Flask 3.0+ for web framework
 - CrewAI 0.36+ for agent orchestration
 - LangChain 0.2+ for LLM integration
-- ChromaDB 0.5+ for vector storage
+- Weaviate 0.5+ for vector storage
 - Neo4j 5.18+ for graph database
 - Python 3.10+ runtime
 
@@ -79,7 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 Environment variables for:
 - LLM server configuration (port 8002)
 - Embedding server configuration (port 8003)
-- ChromaDB persistence
+- Weaviate persistence
 - Neo4j database
 - Flask application
 - RAG parameters (chunk size, overlap, top-k)
@@ -113,6 +120,7 @@ None at this time. Please report issues to [GitHub Issues](https://github.com/Sa
 
 ## Version History
 
+- **1.0.1** - Release artifact refresh and version tag update (May 29, 2026)
 - **1.0.0** - Initial release (May 28, 2024)
 
 ---
