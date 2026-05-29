@@ -94,7 +94,7 @@ Environment variables for:
 
 ### Known Issues
 
-None at this time. Please report issues to [GitHub Issues](https://github.com/sdas/healthexpert/issues).
+None at this time. Please report issues to [GitHub Issues](https://github.com/Sam-max1/healthexpert/issues).
 
 ### Future Roadmap
 

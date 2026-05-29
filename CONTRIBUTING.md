@@ -265,7 +265,7 @@ git commit -m "asdfgh"
 ## Questions?
 
 - **Ask in Issues**: For questions about the project
-- **Email**: sdas@live.com
+- **LinkedIn DM**: [Sam-max1](https://www.linkedin.com/in/sam-max1)
 - **Documentation**: See README.md and HEALTHEXPERT_ARCHITECTURE_DESIGN.md
 
 ## Recognition

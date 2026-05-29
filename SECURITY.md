@@ -13,9 +13,9 @@ We support security updates for recent versions of HealthExpert:
 
 **Do not** open public issues for security vulnerabilities. Instead:
 
-### 1. Email Security Report
+### 1. LinkedIn Direct Message Security Report
 
-Send an email to: **sdas@live.com** with:
+Send a direct message on LinkedIn to [Sam-max1](https://www.linkedin.com/in/sam-max1) with:
 
 - **Subject**: `[SECURITY] HealthExpert Vulnerability Report`
 - **Description**: Clear explanation of the vulnerability
@@ -134,7 +134,7 @@ def query():
 ## Security Updates
 
 - Subscribe to GitHub for release notifications
-- Check [Releases](https://github.com/sdas/healthexpert/releases) regularly
+- Check [Releases](https://github.com/Sam-max1/healthexpert/releases) regularly
 - Monitor dependencies with `pip install --upgrade -r requirements.txt`
 
 ## Vulnerability Scanning
@@ -178,7 +178,7 @@ HealthExpert follows these standards:
 
 ## Questions?
 
-- **Security Issues**: sdas@live.com
+- **Security Issues**: DM on LinkedIn [Sam-max1](https://www.linkedin.com/in/sam-max1)
 - **General Questions**: See [README.md](README.md)
 
 ---
