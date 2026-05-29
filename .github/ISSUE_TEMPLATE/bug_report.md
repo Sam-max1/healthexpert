@@ -33,7 +33,7 @@ assignees: ""
 - **Python Version**: [e.g., 3.10, 3.11]
 - **OS**: [e.g., Linux, macOS, Windows]
 - **GPU**: [e.g., NVIDIA RTX 3090, CPU only]
-- **HealthExpert Version**: [e.g., 1.0.0]
+- **HealthExpert Version**: [e.g., 1.0.1]
 
 ## Logs & Error Messages
 
