@@ -29,19 +29,19 @@ jobs:
     
     - name: Format check with Black
       run: |
-        black --check healthexpert/ agents/ pipeline/ || true
+        black --check . || true
     
     - name: Lint with flake8
       run: |
-        flake8 healthexpert/ agents/ pipeline/ --max-line-length=100 --count --show-source --statistics || true
+        flake8 . --max-line-length=100 --count --show-source --statistics || true
     
     - name: Type check with mypy
       run: |
-        mypy healthexpert/ agents/ pipeline/ --ignore-missing-imports || true
+        mypy . --ignore-missing-imports || true
     
     - name: Run unit tests
       run: |
-        pytest tests/ -v --cov=healthexpert --cov=agents --cov=pipeline || true
+        pytest . -v --cov=pipeline --cov=agents || true
     
     - name: Upload coverage reports
       uses: codecov/codecov-action@v3
@@ -69,7 +69,7 @@ jobs:
     
     - name: Run Bandit security scan
       run: |
-        bandit -r healthexpert/ agents/ pipeline/ -f json -o bandit-report.json || true
+        bandit -r . -f json -o bandit-report.json || true
     
     - name: Check dependencies with Safety
       run: |
@@ -94,4 +94,4 @@ jobs:
     
     - name: Run pylint
       run: |
-        pylint healthexpert/ agents/ pipeline/ --exit-zero || true
+        pylint app.py healthexpert.py agents/ pipeline/ --exit-zero || true
