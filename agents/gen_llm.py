@@ -13,6 +13,8 @@
 from __future__ import annotations
 
 import os
+os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+
 import logging
 
 import torch
@@ -75,12 +77,14 @@ def kv_cache():
     if not kb_text:
         precompiled_kv_cache = None
         kv_cache_length = 0
+        if DEVICE == "cuda":
+            torch.cuda.empty_cache()
         return jsonify({"status": "cleared"})
         
     log.info("Precompiling KV Cache for Knowledge Base (%d chars)", len(kb_text))
     
     prefix = f"<|im_start|>system\nYou are an expert analyst. Here is the entire Knowledge Base:\n{kb_text}<|im_end|>\n"
-    model_inputs = tokenizer([prefix], return_tensors="pt").to(model.device)
+    model_inputs = tokenizer([prefix], return_tensors="pt", truncation=True, max_length=120000).to(model.device)
     
     with torch.no_grad():
         outputs = model(**model_inputs, use_cache=True)
@@ -214,6 +218,9 @@ def completions():
             "text":    answer_text,
             "thinking": think_text,   # empty string when thinking_mode=False
         })
+
+    if DEVICE == "cuda":
+        torch.cuda.empty_cache()
 
     return jsonify({"model": MODEL_NAME, "choices": choices})
 

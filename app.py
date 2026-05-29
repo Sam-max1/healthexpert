@@ -2,8 +2,11 @@
 
 """Document AI Expert — Flask Application."""
 from __future__ import annotations
-import os, uuid, json, threading, subprocess, logging
+import os, uuid, json, threading, subprocess, logging, warnings
 from pathlib import Path
+
+# Suppress crewai ImportWarning
+warnings.filterwarnings("ignore", category=ImportWarning, module="importlib._bootstrap")
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 
 import sys
@@ -127,16 +130,51 @@ def list_documents():
     return jsonify({"documents": docs, "total": len(docs)})
 
 
-# ── Docker control ────────────────────────────────────────────────────────────
+# ── Admin Controls ────────────────────────────────────────────────────────────
 
 @app.route("/api/docker/<action>", methods=["POST"])
 def docker_control(action: str):
     """Control Neo4j docker container. action: up | down | restart"""
+    if not is_admin():
+        return jsonify({"error": "Only admins can control docker containers."}), 403
     if action not in ("up", "down", "restart"):
         return jsonify({"error": f"Unknown action '{action}'. Use: up, down, restart"}), 400
     log.info("Docker action requested: %s", action)
     ok, msg = _run_docker(action)
     return jsonify({"ok": ok, "action": action, "output": msg}), (200 if ok else 500)
+
+@app.route("/api/admin/purge", methods=["POST"])
+def admin_purge():
+    """Wipe all databases clean."""
+    if not is_admin():
+        return jsonify({"error": "Admin only"}), 403
+    try:
+        vector_store.purge()
+        graph_store.purge()
+        global _jobs
+        _jobs.clear()
+        trigger_kv_cache_update()
+        log.warning("Admin triggered database purge.")
+        return jsonify({"ok": True, "msg": "Databases purged successfully."})
+    except Exception as e:
+        log.error("Failed to purge databases: %s", e)
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/admin/kill", methods=["POST"])
+def admin_kill():
+    """Abruptly stop Docker containers and terminate the Flask application."""
+    if not is_admin():
+        return jsonify({"error": "Admin only"}), 403
+        
+    log.error("KILL SWITCH ACTIVATED. Shutting down docker and terminating process.")
+    _run_docker("down")
+    
+    def _shutdown():
+        import time
+        time.sleep(1) # Allow HTTP response to send
+        os._exit(0)
+    threading.Thread(target=_shutdown, daemon=True).start()
+    return jsonify({"ok": True, "msg": "Kill switch activated. Application terminating."})
 
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
@@ -343,12 +381,13 @@ def query():
     def _generate():
         yield "data: {\"status\": \"thinking\"}\n\n"
         try:
-            answer = run_query_crew(q)
+            answer, metrics = run_query_crew(q)
             log.info("Query answered — %d chars", len(answer))
             for i in range(0, len(answer), 80):
                 chunk   = answer[i:i + 80]
                 payload = json.dumps({"chunk": chunk})
                 yield f"data: {payload}\n\n"
+            yield f"data: {json.dumps({'metrics': metrics})}\n\n"
             yield "data: {\"done\": true}\n\n"
         except Exception as e:
             log.exception("Query pipeline error")
@@ -412,6 +451,7 @@ if __name__ == "__main__":
     print("  Document AI Expert")
     print(f"  Gen LLM:   {config.LLM_COMPLETIONS_URL}  [{config.LLM_MODEL_ID}]")
     print(f"  Embed LLM: {config.EMBED_EMBEDDINGS_URL}  [{config.EMBEDDING_MODEL}]")
+    print(f"  Weaviate:  http://localhost:8080")
     print(f"  Neo4j:     {config.NEO4J_URI}")
     print("=" * 60)
     app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)

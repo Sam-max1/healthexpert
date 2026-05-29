@@ -38,11 +38,12 @@
       <div class="status-dot"></div>
       <span class="status-label">Embed LLM</span>
     </div>
-    <!-- Docker controls -->
-    <div id="docker-controls">
-      <button class="docker-btn" id="docker-up-btn"      title="Start Neo4j container">▶ Neo4j</button>
-      <button class="docker-btn warn" id="docker-restart-btn" title="Restart Neo4j container">↺</button>
-      <button class="docker-btn danger" id="docker-down-btn" title="Stop Neo4j container">■</button>
+    <!-- Admin controls -->
+    <div id="admin-controls" style="display:none; gap:8px; align-items:center;">
+      <button class="docker-btn" id="db-up-btn" title="Start Databases">▶ DB Up</button>
+      <button class="docker-btn warn" id="db-down-btn" title="Stop Databases">■ DB Down</button>
+      <button class="docker-btn danger" id="db-purge-btn" title="Wipe all data">⚠ Purge DB</button>
+      <button class="docker-btn danger" id="app-kill-btn" title="Kill application" style="background:#e53e3e">☠ Kill Switch</button>
     </div>
   </div>
 </header>

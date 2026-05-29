@@ -87,6 +87,8 @@ async function refreshStatus() {
     state.isAdmin = !!d.is_admin;
     const adminBadge = $('admin-badge');
     if (adminBadge) adminBadge.style.display = state.isAdmin ? 'inline' : 'none';
+    const adminControls = $('admin-controls');
+    if (adminControls) adminControls.style.display = state.isAdmin ? 'flex' : 'none';
 
     setPill('status-vector', vecOk,   `Vector · ${d.vector_db?.chunks ?? '?'} chunks`);
     setPill('status-graph',  graphOk, graphOk ? `Graph · ${d.graph_db.nodes} nodes, ${d.graph_db.relationships} edges` : 'Graph · offline');
@@ -109,10 +111,10 @@ async function refreshStatus() {
   }
 }
 
-// ── Docker controls ────────────────────────────────────────────────────────────
+// ── Admin controls ────────────────────────────────────────────────────────────
 async function dockerAction(action) {
-  const labels = { up: '▶ Starting', down: '■ Stopping', restart: '↺ Restarting' };
-  dockerModalTitle.textContent = `${labels[action] || action} Neo4j…`;
+  const labels = { up: '▶ Starting', down: '■ Stopping' };
+  dockerModalTitle.textContent = `${labels[action] || action} Databases…`;
   dockerModalBody.textContent  = 'Running docker compose, please wait…';
   dockerModal.style.display    = 'flex';
   diag.info('Docker action:', action);
@@ -124,10 +126,10 @@ async function dockerAction(action) {
     dockerModalBody.innerHTML =
       `<pre class="modal-pre">${escHtml(data.output || 'No output')}</pre>`;
     if (data.ok) {
-      notify(`Neo4j ${action} succeeded`, 'success');
+      notify(`Database ${action} succeeded`, 'success');
       setTimeout(refreshStatus, 3000);
     } else {
-      notify(`Neo4j ${action} failed`, 'error', 8000);
+      notify(`Database ${action} failed`, 'error', 8000);
     }
   } catch(err) {
     diag.error('Docker action failed:', err);
@@ -136,9 +138,45 @@ async function dockerAction(action) {
   }
 }
 
-$('docker-up-btn').addEventListener('click',      () => dockerAction('up'));
-$('docker-restart-btn').addEventListener('click', () => dockerAction('restart'));
-$('docker-down-btn').addEventListener('click',    () => dockerAction('down'));
+async function adminPurge() {
+  if (!confirm("Are you sure you want to completely wipe Weaviate and Neo4j? This cannot be undone.")) return;
+  diag.info('Purge DB action');
+  try {
+    const r = await fetch(`/api/admin/purge`, { method: 'POST' });
+    const data = await r.json();
+    if (data.ok) {
+      notify(data.msg, 'success', 5000);
+      await loadDocuments();
+      await refreshStatus();
+    } else {
+      notify(`Purge failed: ${data.error}`, 'error', 8000);
+    }
+  } catch(err) {
+    notify(`Purge error: ${err.message}`, 'error', 8000);
+  }
+}
+
+async function adminKill() {
+  if (!confirm("EMERGENCY KILL SWITCH: This will stop all databases and instantly kill the application server. Are you sure?")) return;
+  diag.info('Kill switch activated');
+  try {
+    const r = await fetch(`/api/admin/kill`, { method: 'POST' });
+    const data = await r.json();
+    if (data.ok) {
+      notify(data.msg, 'success', 10000);
+      document.body.innerHTML = "<h1 style='color:red; text-align:center; margin-top:20%'>APPLICATION TERMINATED</h1><p style='text-align:center'>Please restart the server manually.</p>";
+    } else {
+      notify(`Kill switch failed: ${data.error}`, 'error', 8000);
+    }
+  } catch(err) {
+    notify(`Kill switch error: ${err.message}`, 'error', 8000);
+  }
+}
+
+$('db-up-btn').addEventListener('click',      () => dockerAction('up'));
+$('db-down-btn').addEventListener('click',    () => dockerAction('down'));
+$('db-purge-btn').addEventListener('click',   adminPurge);
+$('app-kill-btn').addEventListener('click',   adminKill);
 $('docker-modal-close').addEventListener('click', () => { dockerModal.style.display = 'none'; });
 
 // ── Document list ──────────────────────────────────────────────────────────────
@@ -559,6 +597,16 @@ async function submitQuery() {
         if (payload.chunk) {
           fullText += payload.chunk;
           chunkCount++;
+          renderOutput(fullText);
+        }
+        if (payload.metrics) {
+          const m = payload.metrics;
+          const min = Math.floor(m.time_seconds / 60);
+          const sec = Math.round(m.time_seconds % 60);
+          const timeStr = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+          const carbonStr = m.carbon_kg < 0.001 ? "< 1g" : (m.carbon_kg * 1000).toFixed(2) + "g";
+          
+          fullText += `\n\n---\n**📊 Inference Metrics**\n- **Tokens**: ${m.tokens_in} in / ${m.tokens_out} out\n- **Time**: ${timeStr}\n- **Carbon Footprint**: ${carbonStr} CO₂`;
           renderOutput(fullText);
         }
         if (payload.done) { diag.info('SSE: done'); break; }

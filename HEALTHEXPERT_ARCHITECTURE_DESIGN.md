@@ -408,6 +408,16 @@ python healthexpert.py status
 
 ---
 
+## Admin Controls (Localhost Only)
+
+The application provides a suite of powerful administrative capabilities accessible only when the UI is loaded from `localhost` (127.0.0.1). These controls appear in the top-right navigation bar.
+
+1. **DB Up & DB Down**: Control the lifecycle of the containerized Weaviate and Neo4j instances directly from the UI via internal `docker-compose` orchestration.
+2. **Purge DB**: A destructive action that completely deletes the Weaviate class and executes `MATCH (n) DETACH DELETE n` in Neo4j, wiping all ingested data instantly.
+3. **Kill Switch**: An emergency abort mechanism. It issues a `docker-compose down` command and then forces a hard exit of the Flask server (`os._exit(0)`). This is designed to immediately halt runaway CrewAI inference loops or massive ingestion tasks.
+
+---
+
 ## Directory Structure
 
 ```

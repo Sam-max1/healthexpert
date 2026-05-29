@@ -1,6 +1,6 @@
 """CrewAI crew assembly — Ingestor Crew and Analyst Crew."""
 from __future__ import annotations
-import sys, os
+import sys, os, time
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 os.environ["CREWAI_TRACING_ENABLED"] = "true"
 os.environ["CREWAI_TELEMETRY_OPT_OUT"] = "true"
@@ -139,8 +139,19 @@ def run_ingest_crew(file_path: str) -> str:
     return str(result)
 
 
-def run_query_crew(query: str) -> str:
-    """Run the retrieval + analysis crew for a user query. Returns Markdown answer."""
+def run_query_crew(query: str) -> tuple[str, dict]:
+    """Run the retrieval + analysis crew for a user query. Returns Markdown answer and metrics."""
+    start_time = time.time()
+    
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
+
+    def _add_metrics(crew_obj):
+        nonlocal total_prompt_tokens, total_completion_tokens
+        if hasattr(crew_obj, "usage_metrics") and crew_obj.usage_metrics:
+            total_prompt_tokens += getattr(crew_obj.usage_metrics, "prompt_tokens", 0)
+            total_completion_tokens += getattr(crew_obj.usage_metrics, "completion_tokens", 0)
+            
     comprehensive = _comprehensive_agent()
     gatekeeper    = _gatekeeper_agent()
     analyst       = _analyst_agent()
@@ -149,23 +160,39 @@ def run_query_crew(query: str) -> str:
     from pipeline.vector_store import get_all_text
     kb_text = get_all_text()
     
-    print(f"\n[Comprehensive Inference Phase] Triggering agent for: '{query}'")
-    task_comprehensive = Task(
-        description=f"Please answer the following query using ONLY the knowledge base provided below. If the answer is not in the knowledge base, say 'No information'.\n\nKNOWLEDGE BASE:\n{kb_text}\n\nQuery: {query}",
-        expected_output="A detailed answer based ONLY on the documents.",
-        agent=comprehensive
-    )
+    print(f"\n[Comprehensive Inference Phase] Triggering map-reduce agent for: '{query}'")
+    
+    # Split into chunks of ~40,000 characters
+    chunk_size = 40000
+    text_chunks = [kb_text[i:i+chunk_size] for i in range(0, max(len(kb_text), 1), chunk_size)]
+    
+    tasks = []
+    for i, t_chunk in enumerate(text_chunks):
+        tasks.append(Task(
+            description=f"Part {i+1} of {len(text_chunks)}. Answer the query using ONLY the document chunk below. If no relevant info, say 'No information'.\n\nCHUNK:\n{t_chunk}\n\nQuery: {query}",
+            expected_output="A detailed answer based ONLY on the chunk.",
+            agent=comprehensive
+        ))
+        
     crew_comprehensive = Crew(
         agents=[comprehensive],
-        tasks=[task_comprehensive],
+        tasks=tasks,
         process=Process.sequential,
         verbose=True,
     )
     
     try:
-        context_output = str(crew_comprehensive.kickoff())
+        crew_comprehensive.kickoff()
+        _add_metrics(crew_comprehensive)
+        # Aggregate output of all tasks
+        context_outputs = []
+        for t in crew_comprehensive.tasks:
+            out_str = str(t.output.raw_output if hasattr(t.output, 'raw_output') else t.output)
+            if out_str and "no information" not in out_str.lower():
+                context_outputs.append(out_str)
+        context_output = "\n\n".join(context_outputs) if context_outputs else "No relevant documents found."
     except Exception as e:
-        print(f"KV Cache inference failed: {e}. Falling back to standard vector search.")
+        print(f"Comprehensive inference failed: {e}. Falling back to standard vector search.")
         from agents.tools import vector_search, graph_search
         try:
             vec_ctx = vector_search.func(query)
@@ -195,9 +222,15 @@ def run_query_crew(query: str) -> str:
         verbose=True,
     )
     decision = str(crew_gatekeeper.kickoff()).strip().upper()
+    _add_metrics(crew_gatekeeper)
 
     if "YES" not in decision and "NO" in decision:
-        return "Internal data does not have any information to answer the question."
+        end_time = time.time()
+        metrics = {
+            "tokens_in": total_prompt_tokens, "tokens_out": total_completion_tokens,
+            "time_seconds": end_time - start_time, "carbon_kg": ((total_prompt_tokens + total_completion_tokens) / 1000) * 0.0003
+        }
+        return "Internal data does not have any information to answer the question.", metrics
 
     # --- Phase 3: Analysis ---
     task_analyze = Task(
@@ -222,4 +255,17 @@ def run_query_crew(query: str) -> str:
         verbose=True,
     )
     result = crew_analyze.kickoff()
-    return str(result)
+    _add_metrics(crew_analyze)
+    
+    end_time = time.time()
+    total_tokens = total_prompt_tokens + total_completion_tokens
+    carbon_kg = (total_tokens / 1000) * 0.0003
+    
+    metrics = {
+        "tokens_in": total_prompt_tokens,
+        "tokens_out": total_completion_tokens,
+        "time_seconds": end_time - start_time,
+        "carbon_kg": carbon_kg
+    }
+    
+    return str(result), metrics

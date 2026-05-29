@@ -126,3 +126,11 @@ def get_stats() -> dict:
             "OPTIONAL MATCH ()-[r:RELATES_TO]->() RETURN count(r) AS n"
         ).single()["n"]
     return {"available": True, "nodes": nodes, "relationships": rels}
+
+def purge() -> None:
+    """Wipe all nodes and relationships from Neo4j."""
+    d = _get_driver()
+    if not d:
+        return
+    with d.session() as s:
+        s.run("MATCH (n) DETACH DELETE n")
