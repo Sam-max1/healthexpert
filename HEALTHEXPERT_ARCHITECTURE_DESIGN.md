@@ -15,8 +15,8 @@ graph TB
     end
 
     subgraph Backend["Flask REST API (app.py)"]
-        D[POST /api/ingest]
-        E[POST /api/query]
+        D[POST /api/ingest\nPOST /api/v1/ingest/sync]
+        E[POST /api/query\nPOST /api/v1/query]
         F[GET  /api/documents]
         G[GET  /api/status]
     end
@@ -234,7 +234,7 @@ sequenceDiagram
 | Chunker | `pipeline/chunker.py` | Recursive splitting (langchain_text_splitters), flat chunk dicts |
 | Vector Store | `pipeline/vector_store.py` | **ChromaDB** CRUD, **DB25 hybrid search** (Dense + BM25 via RRF), tier support |
 | Graph Store | `pipeline/graph_store.py` | Neo4j CRUD, OPTIONAL MATCH, tier support |
-| Flask App | `app.py` | REST API + Docker control + Tier Access Admin Auth + KV trigger + Health Metrics |
+| Flask App | `app.py` | REST API + Docker control + Tier Access Admin Auth + KV trigger + Health Metrics + Headless v1 API |
 | CLI | `healthexpert.py` | Standalone command-line interface |
 | UI Template | `templates/index.html` | Three-panel SPA + Docker buttons + preset prompts + diagnostic log |
 | Styles | `static/style.css` | Dark glassmorphism + Docker modal + log box + preset btn styles |
@@ -428,6 +428,21 @@ python healthexpert.py query "What is covered under plan X?"
 python healthexpert.py list
 python healthexpert.py status
 ```
+
+### HuggingFace Spaces & Docker (Headless/Cloud)
+
+The system is provided with a `Dockerfile` designed for simple "one-click" deployment on platforms like HuggingFace Spaces. 
+
+```bash
+docker build -t healthexpert .
+docker run -p 7860:7860 -it healthexpert
+```
+
+This Docker setup:
+1. Installs all required OS-level dependencies (like `tesseract-ocr` for document parsing).
+2. Sets `PORT=7860` (the standard for HuggingFace Spaces).
+3. Uses `start.sh` as the `ENTRYPOINT`, which sequentially launches `embed_llm.py` on port 8003, `gen_llm.py` on port 8002, and finally `app.py` bound to `0.0.0.0:$PORT`.
+4. Gracefully disables Neo4j graph extensions, allowing the system to fall back seamlessly to ChromaDB-only vector RAG mode (standard behavior when a graph DB isn't reachable).
 
 ### Environment Variables
 

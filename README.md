@@ -1,6 +1,6 @@
 # HealthExpert 🏥
 
-<div align="center">
+![HealthExpert Admin UI Dashboard](static/screenshot.png)<div align="center">
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.0%2B-green?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)

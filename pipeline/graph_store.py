@@ -34,10 +34,11 @@ def _get_driver():
 
 
 def _init_schema():
-    """Create indexes for fast lookups."""
+    """Create indexes for fast entity lookups."""
     queries = [
         "CREATE INDEX entity_name IF NOT EXISTS FOR (e:Entity) ON (e.name)",
         "CREATE INDEX entity_source IF NOT EXISTS FOR (e:Entity) ON (e.source)",
+        "CREATE INDEX entity_session IF NOT EXISTS FOR (e:Entity) ON (e.session_token)",
     ]
     d = _get_driver()
     if not d:
@@ -47,7 +48,8 @@ def _init_schema():
             try:
                 s.run(q)
             except Exception as e:
-                print(f"[GraphStore] Error cleaning up {source_name}: {e}")
+                # Fixed: was referencing undefined 'source_name' — now logs the query
+                print(f"[GraphStore] Schema init warning for query '{q[:50]}...': {e}")
 
 
 def is_available() -> bool:

@@ -38,8 +38,8 @@ PORT       = int(os.getenv("GEN_PORT", "8002"))
 
 # ── GPU Detection ─────────────────────────────────────────────────────────────
 # Probe CUDA availability and select the target device before model load.
-# If GPU is found, inference is forced onto it.  Falls back to CPU with a
-# warning so the server still starts (slowly) when no GPU is present.
+# FIX: Clear stale VRAM from prior crashed process, cap VRAM at 78% to prevent
+# OOM kill that was causing the CPU fallback seen in the UI.
 
 if torch.cuda.is_available():
     _cuda_count = torch.cuda.device_count()
@@ -51,7 +51,15 @@ if torch.cuda.is_available():
 
     _gpu_props  = torch.cuda.get_device_properties(_cuda_idx)
     _vram_total = _gpu_props.total_memory / 1024 ** 3       # bytes → GiB
+
+    # FIX: Free stale VRAM fragments before loading (critical on restart after OOM kill)
+    torch.cuda.empty_cache()
     _vram_free  = (torch.cuda.mem_get_info(_cuda_idx)[0]) / 1024 ** 3
+
+    # FIX: Reserve 22% VRAM headroom for KV cache + generation buffers
+    # This prevents the OOM kill that was forcing CPU fallback on the RTX 5060 Ti
+    _vram_budget_gib = max(4.0, _vram_total * 0.78)
+    _max_memory = {_cuda_idx: f"{_vram_budget_gib:.1f}GiB", "cpu": "4GiB"}
 
     log.info("━" * 60)
     log.info("GPU DETECTED")
@@ -60,6 +68,7 @@ if torch.cuda.is_available():
     log.info("  CUDA version : %s", torch.version.cuda)
     log.info("  VRAM total   : %.2f GiB", _vram_total)
     log.info("  VRAM free    : %.2f GiB", _vram_free)
+    log.info("  VRAM budget  : %.2f GiB (78%% cap, prevents OOM kill)", _vram_budget_gib)
     log.info("  Compute cap  : %d.%d", _gpu_props.major, _gpu_props.minor)
     log.info("  Inference    : FORCED on %s", _gpu_id)
     log.info("━" * 60)
@@ -67,6 +76,7 @@ else:
     _device     = torch.device("cpu")
     _gpu_id     = "cpu"
     _device_map = "cpu"
+    _max_memory = None
     log.warning("━" * 60)
     log.warning("NO GPU DETECTED — inference will run on CPU (slow).")
     log.warning("Ensure CUDA drivers and PyTorch CUDA build are installed.")
@@ -84,12 +94,17 @@ bnb_config = BitsAndBytesConfig(
 log.info("Loading model %s with 4-bit NF4 quantization → %s ...", MODEL_NAME, _gpu_id)
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
+
+    load_kwargs = dict(
         quantization_config=bnb_config,
         device_map=_device_map,     # explicitly mapped to detected GPU (or CPU)
         trust_remote_code=True,
     )
+    # FIX: Apply VRAM budget cap to prevent OOM kill → CPU fallback
+    if _max_memory is not None:
+        load_kwargs["max_memory"] = _max_memory
+
+    model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **load_kwargs)
     model.eval()
 
     if tokenizer.pad_token_id is None:
@@ -100,6 +115,18 @@ except Exception as e:
     raise
 
 log.info("Model ready! (%s, 4-bit NF4, device=%s)", MODEL_NAME, _gpu_id)
+
+# ── Optional: torch.compile() for ~10-15% repeated inference speedup ──────────
+# Requires PyTorch >= 2.0. Wrapped in try/except for graceful fallback.
+_compile_applied = False
+try:
+    import torch._dynamo
+    torch._dynamo.config.suppress_errors = True
+    model = torch.compile(model, mode="reduce-overhead", fullgraph=False)
+    _compile_applied = True
+    log.info("torch.compile() applied — repeated inference will be faster.")
+except Exception as _ce:
+    log.info("torch.compile() skipped (%s) — running in eager mode.", type(_ce).__name__)
 
 # ── Flask app & KV Cache ──────────────────────────────────────────────────────
 precompiled_kv_cache = None
@@ -143,12 +170,20 @@ def kv_cache():
 
 @app.route("/health", methods=["GET"])
 def health():
+    vram_free_gib = 0.0
+    if torch.cuda.is_available():
+        try:
+            vram_free_gib = round(torch.cuda.mem_get_info(_cuda_idx)[0] / 1024 ** 3, 2)
+        except Exception:
+            pass
     return jsonify({
         "status":           "ok",
         "model":            MODEL_NAME,
         "quantization":     "4-bit NF4 (bitsandbytes)",
         "gpu_id":           _gpu_id,
         "kv_cache_length":  kv_cache_length,
+        "torch_compile":    _compile_applied,
+        "vram_free_gib":    vram_free_gib,
     })
 
 
@@ -163,6 +198,7 @@ def completions():
 
     prompts: list[str] = raw_prompt if isinstance(raw_prompt, list) else [raw_prompt]
 
+    # max_new_tokens: 2048 — allows full detailed Markdown answers without truncation
     max_new_tokens = int(  data.get("max_tokens",   2048))
     temperature    = float(data.get("temperature",  0.7))
     top_p          = float(data.get("top_p",        0.95))
@@ -191,11 +227,14 @@ def completions():
                     attention_mask=attention_mask,
                     past_key_values=precompiled_kv_cache,
                     max_new_tokens=max_new_tokens,
-                    temperature=temperature if temperature > 0 else 1.0,
+                    min_new_tokens=20,
+                    temperature=temperature if temperature > 0.15 else 1.0,
                     top_p=top_p,
-                    do_sample=temperature > 0,
+                    do_sample=temperature > 0.15,    # greedy decode for low-temp = faster
+                    repetition_penalty=1.1,           # prevents Qwen3 repetition loops
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=eos_token_id,
+                    use_cache=True,
                 )
 
             new_tokens = outputs[0][curr_length:]
@@ -218,11 +257,14 @@ def completions():
                     input_ids=inputs.input_ids,
                     attention_mask=inputs.attention_mask,
                     max_new_tokens=max_new_tokens,
-                    temperature=temperature if temperature > 0 else 1.0,
+                    min_new_tokens=20,
+                    temperature=temperature if temperature > 0.15 else 1.0,
                     top_p=top_p,
-                    do_sample=temperature > 0,
+                    do_sample=temperature > 0.15,    # greedy decode for low-temp = faster
+                    repetition_penalty=1.1,           # prevents Qwen3 repetition loops
                     pad_token_id=tokenizer.pad_token_id,
                     eos_token_id=eos_token_id,
+                    use_cache=True,
                 )
 
             new_tokens = outputs[0][inputs.input_ids.shape[1]:]
@@ -243,7 +285,8 @@ def completions():
                 think_text  = full_output[len("<think>"):think_end].strip()
                 answer_text = full_output[think_end + len("</think>"):].strip()
 
-        log.debug("Prompt %d → %d new tokens (thinking=%s)", i, completion_len, thinking_mode)
+        log.info("Prompt %d → %d new tokens (thinking=%s, device=%s)",
+                 i, completion_len, thinking_mode, _gpu_id)
 
         choices.append({
             "index":    i,
@@ -273,8 +316,11 @@ if __name__ == "__main__":
     log.info("Starting gen_llm server on %s:%d", HOST, PORT)
     cert_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cert.pem")
     key_path  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "key.pem")
+    # FIX: threaded=True — allows concurrent HTTP connections.
+    # The previous threaded=False serialized ALL requests at HTTP level,
+    # causing CrewAI's multiple LLM calls to queue and timeout.
     if os.path.exists(cert_path) and os.path.exists(key_path):
-        app.run(host=HOST, port=PORT, debug=False, threaded=False,
+        app.run(host=HOST, port=PORT, debug=False, threaded=True,
                 ssl_context=(cert_path, key_path))
     else:
-        app.run(host=HOST, port=PORT, debug=False, threaded=False)
+        app.run(host=HOST, port=PORT, debug=False, threaded=True)
