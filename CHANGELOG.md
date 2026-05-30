@@ -120,6 +120,7 @@ None at this time. Please report issues to [GitHub Issues](https://github.com/Sa
 
 ## Version History
 
+- **1.1.0** - Added headless API endpoints, HuggingFace Docker support, and updated version tag (May 31, 2026)
 - **1.0.1** - Release artifact refresh and version tag update (May 29, 2026)
 - **1.0.0** - Initial release (May 28, 2024)
 

@@ -35,6 +35,7 @@ const sendBtn         = $('send-btn');
 const outputContainer = $('output-container');
 const copyBtn         = $('copy-btn');
 const citationsBlock  = $('citations-block');
+const metricsBanner   = $('metrics-banner');
 const notifContainer  = $('notif-container');
 const dockerModal     = $('docker-modal');
 const dockerModalTitle= $('docker-modal-title');
@@ -541,12 +542,7 @@ function addThinkingMsg(qId) {
         <div class="milestone-graph" id="milestone-graph-${qId}">
           <div class="milestone" id="ms-inference-${qId}">
             <div class="milestone-dot"></div>
-            <span>Inference <span class="milestone-timer" data-time="0">(0.0s)</span></span>
-          </div>
-          <div class="milestone-line"></div>
-          <div class="milestone" id="ms-gatekeeping-${qId}">
-            <div class="milestone-dot"></div>
-            <span>Gatekeeping <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <span>Retrieval <span class="milestone-timer" data-time="0">(0.0s)</span></span>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-analysis-${qId}">
@@ -580,11 +576,40 @@ async function submitQuery() {
     <div class="ph-icon">⚙️</div>
     <div>Analyzing healthcare policy documents…</div>
   </div>`;
-  citationsBlock.innerHTML = '';
-  copyBtn.style.display    = 'none';
+  metricsBanner.style.display = 'none';
+  metricsBanner.innerHTML     = '';
+  citationsBlock.innerHTML    = '';
+  copyBtn.style.display       = 'none';
 
-  let fullText = '';
+  let fullText  = '';
   let chunkCount = 0;
+
+  // Hoisted outside try{} so catch{} and finally{} can access them
+  // (let/function inside try{} are block-scoped and invisible to catch{})
+  let currentTimerInterval = null;
+  let currentMsId          = null;
+  let currentStartTime     = 0;
+
+  function startTimer(msId) {
+    if (currentTimerInterval) clearInterval(currentTimerInterval);
+    currentMsId       = msId;
+    currentStartTime  = Date.now();
+    currentTimerInterval = setInterval(() => {
+      const el = $(currentMsId);
+      if (!el) return;
+      const timerSpan = el.querySelector('.milestone-timer');
+      if (timerSpan) {
+        const s = (Date.now() - currentStartTime) / 1000;
+        timerSpan.innerText    = `(${s.toFixed(1)}s)`;
+        timerSpan.dataset.time = s.toFixed(1);
+      }
+    }, 100);
+  }
+
+  function stopTimer() {
+    if (currentTimerInterval) clearInterval(currentTimerInterval);
+    currentTimerInterval = null;
+  }
 
   try {
     diag.info('POST /api/query');
@@ -595,39 +620,13 @@ async function submitQuery() {
     });
 
     if (!resp.ok) {
-      const err = await resp.json();
-      throw new Error(err.error || `HTTP ${resp.status}`);
+      const errData = await resp.json();
+      throw new Error(errData.error || `HTTP ${resp.status}`);
     }
 
     const reader  = resp.body.getReader();
     const decoder = new TextDecoder();
     let   buffer  = '';
-    
-    // Timer logic
-    let currentTimerInterval = null;
-    let currentMsId = null;
-    let currentStartTime = 0;
-    
-    function startTimer(msId) {
-      if (currentTimerInterval) clearInterval(currentTimerInterval);
-      currentMsId = msId;
-      currentStartTime = Date.now();
-      currentTimerInterval = setInterval(() => {
-        const el = $(currentMsId);
-        if (!el) return;
-        const timerSpan = el.querySelector('.milestone-timer');
-        if (timerSpan) {
-          const s = (Date.now() - currentStartTime) / 1000;
-          timerSpan.innerText = `(${s.toFixed(1)}s)`;
-          timerSpan.dataset.time = s.toFixed(1);
-        }
-      }, 100);
-    }
-    
-    function stopTimer() {
-      if (currentTimerInterval) clearInterval(currentTimerInterval);
-      currentTimerInterval = null;
-    }
 
     while (true) {
       const { done, value } = await reader.read();
@@ -642,74 +641,76 @@ async function submitQuery() {
         try { payload = JSON.parse(line.slice(6)); }
         catch(pe) { diag.warn('SSE parse error:', pe, line); continue; }
 
-        if (payload.error)              throw new Error(payload.error);
+        if (payload.error) throw new Error(payload.error);
+
+        // ── Phase status updates → milestone graph ──────────────────
         if (payload.status) {
           diag.info('SSE status:', payload.status);
-          const msInference = $(`ms-inference-${qId}`);
-          const msGatekeeping = $(`ms-gatekeeping-${qId}`);
-          const msAnalysis = $(`ms-analysis-${qId}`);
-          
-          if (!msInference || !msGatekeeping || !msAnalysis) continue;
+          const msRetrieval = $(`ms-inference-${qId}`);
+          const msAnalysis  = $(`ms-analysis-${qId}`);
+          if (!msRetrieval || !msAnalysis) continue;
 
-          // Clear current executing dots
-          [`ms-inference-${qId}`, `ms-gatekeeping-${qId}`, `ms-analysis-${qId}`].forEach(id => {
-             const el = $(id);
-             if (el) {
-                 const dot = el.querySelector('.milestone-dot');
-                 if (dot.className.includes('executing')) {
-                     dot.className = 'milestone-dot complete';
-                 }
-             }
+          // Mark previous executing dot as complete before starting next
+          [msRetrieval, msAnalysis].forEach(el => {
+            const dot = el.querySelector('.milestone-dot');
+            if (dot && dot.className.includes('executing')) {
+              dot.className = 'milestone-dot complete';
+            }
           });
 
           if (payload.status === 'inference') {
-            msInference.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            // Phase 1: Retrieval (vector + graph search)
+            msRetrieval.querySelector('.milestone-dot').className = 'milestone-dot executing';
             startTimer(`ms-inference-${qId}`);
           } else if (payload.status === 'gatekeeping') {
-            msGatekeeping.querySelector('.milestone-dot').className = 'milestone-dot executing';
-            startTimer(`ms-gatekeeping-${qId}`);
+            // Phase 2: Gatekeeper is now instant (pure Python) — mark retrieval done
+            stopTimer();
+            msRetrieval.querySelector('.milestone-dot').className = 'milestone-dot complete';
           } else if (payload.status === 'analysis') {
+            // Phase 3: LLM synthesis
             msAnalysis.querySelector('.milestone-dot').className = 'milestone-dot executing';
             startTimer(`ms-analysis-${qId}`);
           }
         }
+
+        // ── Answer chunks → render output ───────────────────────────
         if (payload.chunk) {
+          // Mark analysis milestone complete on first chunk arrival
           if (currentMsId) {
-            const el = $(currentMsId);
-            if (el) {
-              const dot = el.querySelector('.milestone-dot');
-              if (dot && dot.className.includes('executing')) {
-                if (currentMsId.includes('gatekeeping')) {
-                  dot.className = 'milestone-dot failed';
-                } else {
-                  dot.className = 'milestone-dot complete';
-                }
-                stopTimer();
-              }
+            const el  = $(currentMsId);
+            const dot = el ? el.querySelector('.milestone-dot') : null;
+            if (dot && dot.className.includes('executing')) {
+              dot.className = 'milestone-dot complete';
+              stopTimer();
             }
           }
           fullText += payload.chunk;
           chunkCount++;
           renderOutput(fullText);
         }
+
+        // ── Metrics → banner at top of output panel ─────────────────
         if (payload.metrics) {
           const m = payload.metrics;
-          const min = Math.floor(m.time_seconds / 60);
-          const sec = Math.round(m.time_seconds % 60);
-          const timeStr = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
-          const carbonStr = m.carbon_kg < 0.001 ? "< 1g" : (m.carbon_kg * 1000).toFixed(2) + "g";
-          
-          fullText += `\n\n---\n**📊 Inference Metrics**\n- **Tokens**: ${m.tokens_in} in / ${m.tokens_out} out\n- **Time**: ${timeStr}\n- **Carbon Footprint**: ${carbonStr} CO₂`;
-          renderOutput(fullText);
+          const min      = Math.floor(m.time_seconds / 60);
+          const sec      = Math.round(m.time_seconds % 60);
+          const timeStr  = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+          const carbonStr = m.carbon_kg < 0.001 ? '< 1g' : (m.carbon_kg * 1000).toFixed(2) + 'g';
+          renderMetricsBanner(m.tokens_in, m.tokens_out, timeStr, carbonStr);
         }
+
         if (payload.done) { diag.info('SSE: done'); break; }
       }
     }
 
     diag.info(`Query complete — ${chunkCount} SSE chunks, ${fullText.length} chars`);
     stopTimer();
-    // Do not remove thinkingEl to preserve the graph
-    // thinkingEl.remove();
+    // Ensure both milestone dots are marked complete
+    [$(`ms-inference-${qId}`), $(`ms-analysis-${qId}`)].forEach(el => {
+      if (!el) return;
+      const dot = el.querySelector('.milestone-dot');
+      if (dot && !dot.className.includes('failed')) dot.className = 'milestone-dot complete';
+    });
     addChatMsg('Answer generated — see the Output panel →', 'assistant');
     extractAndShowCitations(fullText);
     copyBtn.style.display = 'block';
@@ -719,12 +720,10 @@ async function submitQuery() {
   } catch(err) {
     diag.error('Query error:', err);
     stopTimer();
-    // Mark active dot as failed
     if (currentMsId) {
       const el = $(currentMsId);
       if (el) el.querySelector('.milestone-dot').className = 'milestone-dot failed';
     }
-    // thinkingEl.remove();
     addChatMsg(`❌ ${escHtml(err.message)}`, 'assistant');
     outputContainer.innerHTML = `<div class="output-placeholder" style="color:var(--red)">
       <div class="ph-icon">⚠️</div><div>${escHtml(err.message)}</div>
@@ -741,6 +740,18 @@ async function submitQuery() {
 function renderOutput(mdText) {
   outputContainer.innerHTML = marked.parse(mdText);
   outputContainer.scrollTop = outputContainer.scrollHeight;
+}
+
+// ── Metrics banner (pinned at top of output panel) ────────────────────────────
+function renderMetricsBanner(tokIn, tokOut, timeStr, carbonStr) {
+  metricsBanner.innerHTML = `
+    <div class="metrics-banner-inner">
+      <span class="metrics-title">📊 Inference Metrics</span>
+      <span class="metrics-pill">🔢 <strong>${tokIn}</strong> in / <strong>${tokOut}</strong> out tokens</span>
+      <span class="metrics-pill">⏱ <strong>${timeStr}</strong></span>
+      <span class="metrics-pill">🌱 <strong>${carbonStr}</strong> CO₂</span>
+    </div>`;
+  metricsBanner.style.display = 'block';
 }
 
 function extractAndShowCitations(mdText) {

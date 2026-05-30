@@ -25,7 +25,7 @@ class LocalLLM(BaseLLM):
     def call(self, messages: list[dict], callbacks: list[Any] | None = None, **kwargs: Any) -> str:
         # Flatten conversation history into a single string since gen_llm.py wraps it in a user role
         prompt = "\n".join([f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages])
-        
+
         payload = {
             "model_id":    self.model,
             "prompt":      prompt,
@@ -44,13 +44,20 @@ class LocalLLM(BaseLLM):
             )
             resp.raise_for_status()
             data = resp.json()
-            usage = data.get("usage")
+            usage = data.get("usage", {})
+            # Store token counts so callers can read them without CrewAI usage_metrics
+            self._last_prompt_tokens     = usage.get("prompt_tokens",     0)
+            self._last_completion_tokens = usage.get("completion_tokens", 0)
             if usage:
                 self._track_token_usage_internal(usage)
             return data["choices"][0]["text"].strip()
         except requests.exceptions.ConnectionError:
+            self._last_prompt_tokens     = 0
+            self._last_completion_tokens = 0
             return "[LLM ERROR] Cannot connect to local endpoint. Is the AMD/Nvidia server running?"
         except Exception as e:
+            self._last_prompt_tokens     = 0
+            self._last_completion_tokens = 0
             return f"[LLM ERROR] {e}"
 
     def supports_function_calling(self) -> bool:

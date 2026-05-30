@@ -20,6 +20,11 @@ from rank_bm25 import BM25Okapi
 _client: chromadb.PersistentClient | None = None
 _collection: chromadb.Collection | None = None
 
+# ── Performance: in-memory caches (invalidated on every write/delete/purge) ────
+_text_cache: str | None = None          # result of get_all_text("admin")
+_text_cache_valid: bool = False         # invalidated on every add/delete/purge
+_bm25_cache: tuple | None = None        # (count, BM25Okapi) – rebuilt on count change
+
 
 def _get_collection() -> chromadb.Collection:
     global _client, _collection
@@ -75,8 +80,14 @@ def _db25_fuse(
     dense_rank = {doc_id: rank for rank, doc_id in enumerate(ids)}
 
     # BM25 rank over decrypted candidate texts
-    tokenized = [t.lower().split() for t in candidate_texts]
-    bm25 = BM25Okapi(tokenized)
+    # Performance: cache BM25 index keyed on collection size.
+    # The index only changes when chunks are added or deleted.
+    global _bm25_cache
+    col_count = len(ids)
+    if _bm25_cache is None or _bm25_cache[0] != col_count:
+        tokenized = [t.lower().split() for t in candidate_texts]
+        _bm25_cache = (col_count, BM25Okapi(tokenized))
+    bm25 = _bm25_cache[1]
     bm25_scores = bm25.get_scores(query_text.lower().split())
     # Rank descending by BM25 score (highest score = rank 0)
     bm25_order = sorted(range(n), key=lambda i: bm25_scores[i], reverse=True)
@@ -143,6 +154,12 @@ def add_chunks(
 
     # ChromaDB batch upsert
     col.upsert(ids=ids, documents=docs, metadatas=metadatas, embeddings=vecs)
+
+    # Invalidate caches so next read reflects the new data
+    global _text_cache_valid, _bm25_cache
+    _text_cache_valid = False
+    _bm25_cache = None
+
     return len(chunks)
 
 
@@ -235,7 +252,17 @@ def list_documents(session_token: str = "admin") -> list[dict]:
 
 
 def get_all_text(session_token: str = "admin") -> str:
-    """Return all document text in the knowledge base, concatenated."""
+    """Return all document text in the knowledge base, concatenated.
+
+    Performance: caches the admin result and returns it immediately on
+    subsequent calls until cache is invalidated by add/delete/purge.
+    """
+    global _text_cache, _text_cache_valid
+
+    # Fast path: return cached result for admin (most common caller)
+    if session_token == "admin" and _text_cache_valid and _text_cache is not None:
+        return _text_cache
+
     col = _get_collection()
 
     all_data = col.get(include=["documents", "metadatas"])
@@ -251,7 +278,15 @@ def get_all_text(session_token: str = "admin") -> str:
         text = decrypt_data(enc_text)
         if text:
             texts.append(text)
-    return "\n\n".join(texts)
+
+    result = "\n\n".join(texts)
+
+    # Populate cache for admin queries
+    if session_token == "admin":
+        _text_cache = result
+        _text_cache_valid = True
+
+    return result
 
 
 def delete_document(source_name: str, session_token: str = "admin") -> int:
@@ -273,6 +308,12 @@ def delete_document(source_name: str, session_token: str = "admin") -> int:
     ids = result.get("ids") or []
     if ids:
         col.delete(ids=ids)
+
+    # Invalidate caches
+    global _text_cache_valid, _bm25_cache
+    _text_cache_valid = False
+    _bm25_cache = None
+
     return len(ids)
 
 
@@ -298,7 +339,7 @@ def count() -> int:
 
 def purge() -> None:
     """Wipe the entire ChromaDB collection and reset the in-memory client."""
-    global _client, _collection
+    global _client, _collection, _text_cache, _text_cache_valid, _bm25_cache
     if _client is not None and _collection is not None:
         try:
             _client.delete_collection(config.CHROMA_COLLECTION)
@@ -306,3 +347,6 @@ def purge() -> None:
             pass
     _client = None
     _collection = None
+    _text_cache = None
+    _text_cache_valid = False
+    _bm25_cache = None

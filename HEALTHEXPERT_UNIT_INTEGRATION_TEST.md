@@ -432,3 +432,20 @@ Error handling scenarios      ✅  5/5  PASS
 
 > [!TIP]
 > Use the **🧠 Test Gen LLM** and **🔢 Test Embed LLM** buttons in the UI to quickly verify both servers are responding before ingesting documents.
+
+
+## Automated Test Run Output
+
+```text
+============================= test session starts ==============================
+platform linux -- Python 3.13.5, pytest-9.0.3, pluggy-1.5.0 -- /home/admin1/miniconda3/bin/python3.13
+cachedir: .pytest_cache
+rootdir: /source/python/code/healthexpert
+plugins: anyio-4.13.0, langsmith-0.8.6, cov-7.1.0
+collecting ... collected 2 items
+
+test_healthexpert.py::test_encryption PASSED                             [ 50%]
+test_healthexpert.py::test_empty_encryption PASSED                       [100%]
+
+============================== 2 passed in 0.03s ===============================
+```

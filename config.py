@@ -18,8 +18,10 @@ LLM_BASE_URL          = os.getenv("LLM_BASE_URL",   "https://127.0.0.1:8002")
 LLM_COMPLETIONS_URL   = f"{LLM_BASE_URL}/v1/completions"
 LLM_MODEL_ID          = os.getenv("LLM_MODEL_ID",   "Qwen/Qwen3-8B")
 LLM_MODEL_FILENAME    = os.getenv("LLM_MODEL_FILENAME", "") # Ignored for transformers
+# 2048 output tokens — sufficient for detailed Markdown RAG answers without truncation.
 LLM_MAX_TOKENS        = int(os.getenv("LLM_MAX_TOKENS",   "2048"))
-LLM_TEMPERATURE       = float(os.getenv("LLM_TEMPERATURE", "0.7"))
+# Low temperature = near-deterministic, less hallucination, faster greedy decode.
+LLM_TEMPERATURE       = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_TOP_P             = float(os.getenv("LLM_TOP_P",       "0.9"))
 LLM_TIMEOUT           = int(os.getenv("LLM_TIMEOUT",      "300"))
 

@@ -489,6 +489,112 @@ def query():
     )
 
 
+# ── Headless API v1 ───────────────────────────────────────────────────────────
+
+@app.route("/api/v1/query", methods=["POST"])
+def query_v1():
+    """Headless RAG query — synchronous JSON response."""
+    data = request.get_json()
+    q    = (data or {}).get("query", "").strip()
+    if not q:
+        return jsonify({"error": "Empty query"}), 400
+
+    token = get_session_token()
+    chunk_count = vector_store.count()
+    if chunk_count == 0:
+        return jsonify({"error": "No documents ingested yet."}), 400
+
+    log.info("v1 Query received (%d chars) | session: %s", len(q), token)
+    config.current_session.set(token)
+    try:
+        ans, metrics = run_query_crew(q, session_token=token)
+        return jsonify({"answer": ans, "metrics": metrics})
+    except Exception as e:
+        log.exception("v1 Query pipeline error")
+        return jsonify({"error": str(e)}), 500
+
+@app.route("/api/v1/ingest/sync", methods=["POST"])
+def ingest_v1_sync():
+    """Headless synchronous document ingestion."""
+    if "files" not in request.files:
+        return jsonify({"error": "No files uploaded"}), 400
+
+    files = request.files.getlist("files")
+    tier = request.form.get("tier", "extended")
+    token = get_session_token()
+
+    if tier == "foundation" and not is_admin():
+        return jsonify({"error": "Only admins can upload to the Foundation tier."}), 403
+
+    saved_paths = []
+    rejected = []
+    for f in files:
+        if not f.filename: continue
+        if not _allowed(f.filename):
+            rejected.append(f.filename)
+            continue
+        safe_name = f"{uuid.uuid4().hex[:6]}_{Path(f.filename).name}"
+        dest = os.path.join(config.UPLOAD_FOLDER, safe_name)
+        f.save(dest)
+        saved_paths.append((dest, f.filename))
+
+    if not saved_paths:
+        return jsonify({"error": "No valid files", "rejected": rejected}), 400
+
+    config.current_session.set(token)
+    results = []
+    
+    for path, orig_name in saved_paths:
+        try:
+            docs = document_loader.load_document(path)
+            chunks = chunker.chunk_documents(docs)
+            if not chunks:
+                raise ValueError("No text extracted")
+            
+            texts = [c["text"] for c in chunks]
+            embeddings = embedder.embed_texts(texts)
+            
+            doc_id = uuid.uuid4().hex[:8]
+            added = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
+            
+            entities_stored = 0
+            if graph_store.is_available():
+                sample_text = "\n\n".join(d["text"] for d in docs[:3])[:3000]
+                from agents.llm import get_llm
+                llm = get_llm()
+                prompt = (
+                    "Extract key entities from the text below.\n"
+                    "Return a JSON array of objects with keys: name, type, relations.\n"
+                    "type must be a broad category like: Person, Organization, Location, Concept, Event, Document, Object, Rule.\n"
+                    "relations is a list of {target, rel} objects.\n"
+                    "Return ONLY the JSON array.\n\n"
+                    f"TEXT:\n{sample_text}\n\nJSON:"
+                )
+                raw = llm.call([{"role": "user", "content": prompt}])
+                start, end = raw.find("["), raw.rfind("]") + 1
+                if start != -1 and end > start:
+                    try:
+                        entities = json.loads(raw[start:end])
+                        graph_store.store_entities(entities, orig_name, tier=tier, session_token=token)
+                        entities_stored = len(entities)
+                    except Exception:
+                        pass
+            
+            results.append({
+                "file": orig_name, 
+                "status": "success", 
+                "chunks_added": added,
+                "entities_added": entities_stored
+            })
+        except Exception as e:
+            results.append({"file": orig_name, "status": "error", "error": str(e)})
+        finally:
+            if os.path.exists(path):
+                os.remove(path)
+                
+    trigger_kv_cache_update(token)
+    return jsonify({"results": results, "rejected": rejected})
+
 # ── LLM probe endpoints (used by default prompt buttons) ─────────────────────
 
 @app.route("/api/probe/gen", methods=["POST"])
@@ -553,7 +659,7 @@ if __name__ == "__main__":
     key_path = str(Path(__file__).parent / "key.pem")
     
     if os.path.exists(cert_path) and os.path.exists(key_path):
-        app.run(host="127.0.0.1", port=5050, debug=False, threaded=True, ssl_context=(cert_path, key_path))
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True, ssl_context=(cert_path, key_path))
     else:
         log.warning("SSL certificates not found! Running in HTTP mode.")
-        app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True)

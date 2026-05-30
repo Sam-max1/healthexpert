@@ -389,16 +389,21 @@ html, body {
 #send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
 /* ── Output Panel ───────────────────────────────────────────────────────────── */
-#output-panel { background: var(--bg-primary); }
+#output-panel .panel-body {
+  display: flex;
+  flex-direction: column;
+}
 
 #output-container {
   background: var(--bg-panel);
   border: 1px solid var(--border);
   border-radius: var(--radius);
   min-height: 200px;
+  flex: 1;
   padding: 16px;
   font-size: 13px;
   line-height: 1.7;
+  overflow-y: auto;
 }
 
 /* Markdown rendering */
@@ -442,6 +447,47 @@ html, body {
   line-height: 1.6;
 }
 .output-placeholder .ph-icon { font-size: 36px; margin-bottom: 10px; opacity: 0.4; }
+
+/* ── Inference Metrics Banner (pinned at top of output panel) ───────────────── */
+#metrics-banner {
+  margin-bottom: 14px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(0,212,255,0.08), rgba(124,58,237,0.08));
+  border: 1px solid rgba(0,212,255,0.2);
+  padding: 10px 14px;
+  animation: fadeSlideUp 0.3s ease;
+}
+.metrics-banner-inner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.metrics-title {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-right: 4px;
+  white-space: nowrap;
+}
+.metrics-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 10px;
+  border-radius: 99px;
+  background: rgba(255,255,255,0.05);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+.metrics-pill strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
 
 /* Citations */
 #citations-block { margin-top: 16px; }
