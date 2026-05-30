@@ -82,24 +82,30 @@ else:
     log.warning("Ensure CUDA drivers and PyTorch CUDA build are installed.")
     log.warning("━" * 60)
 
-# ── 4-bit NF4 quantization (bitsandbytes) ────────────────────────────────────
-bnb_config = BitsAndBytesConfig(
-    load_in_4bit=True,
-    bnb_4bit_quant_type="nf4",
-    bnb_4bit_compute_dtype=torch.bfloat16,
-    bnb_4bit_use_double_quant=True,     # nested quantization saves ~0.4 GB additional
-)
-
 # ── Model Initialization ───────────────────────────────────────────────────────
-log.info("Loading model %s with 4-bit NF4 quantization → %s ...", MODEL_NAME, _gpu_id)
 try:
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
 
-    load_kwargs = dict(
-        quantization_config=bnb_config,
-        device_map=_device_map,     # explicitly mapped to detected GPU (or CPU)
-        trust_remote_code=True,
-    )
+    if _gpu_id == "cpu":
+        log.info("Loading model %s WITHOUT quantization (CPU mode) ...", MODEL_NAME)
+        load_kwargs = dict(
+            device_map=_device_map,
+            trust_remote_code=True,
+            torch_dtype=torch.float32,
+        )
+    else:
+        log.info("Loading model %s with 4-bit NF4 quantization → %s ...", MODEL_NAME, _gpu_id)
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.bfloat16,
+            bnb_4bit_use_double_quant=True,
+        )
+        load_kwargs = dict(
+            quantization_config=bnb_config,
+            device_map=_device_map,
+            trust_remote_code=True,
+        )
     # FIX: Apply VRAM budget cap to prevent OOM kill → CPU fallback
     if _max_memory is not None:
         load_kwargs["max_memory"] = _max_memory
