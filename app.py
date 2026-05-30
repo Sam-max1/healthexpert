@@ -658,8 +658,8 @@ if __name__ == "__main__":
     cert_path = str(Path(__file__).parent / "cert.pem")
     key_path = str(Path(__file__).parent / "key.pem")
     
-    if os.path.exists(cert_path) and os.path.exists(key_path):
+    if os.path.exists(cert_path) and os.path.exists(key_path) and not os.environ.get("SPACE_ID"):
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True, ssl_context=(cert_path, key_path))
     else:
-        log.warning("SSL certificates not found! Running in HTTP mode.")
+        log.warning("SSL certificates not found or disabled (HF Space)! Running in HTTP mode.")
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True)
