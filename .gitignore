@@ -172,3 +172,4 @@ neo4j/logs/
 
 # Excluded Strategic Documents
 docs/
+!docs/HEALTHEXPERT_USER_GUIDE.md
