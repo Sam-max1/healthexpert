@@ -3,31 +3,36 @@
 Two backend microservices:
   gen_llm.py   → port 8002  POST /v1/completions  (text generation)
   embed_llm.py → port 8003  POST /v1/embeddings   (dense/sparse/ColBERT)
+
+Vector store: ChromaDB (embedded, persistent) — no separate server required.
 """
 import os
 from pathlib import Path
+import contextvars
 
 BASE_DIR = Path(__file__).parent
+current_session = contextvars.ContextVar("current_session", default="admin")
 
 # ── LLM generation server (gen_llm.py — port 8002) ──────────────────────────
-LLM_BASE_URL          = os.getenv("LLM_BASE_URL",   "http://127.0.0.1:8002")
+LLM_BASE_URL          = os.getenv("LLM_BASE_URL",   "https://127.0.0.1:8002")
 LLM_COMPLETIONS_URL   = f"{LLM_BASE_URL}/v1/completions"
-LLM_MODEL_ID          = os.getenv("LLM_MODEL_ID",   "Qwen/Qwen3-8B")  # HuggingFace transformers
+LLM_MODEL_ID          = os.getenv("LLM_MODEL_ID",   "Qwen/Qwen3-8B")
+LLM_MODEL_FILENAME    = os.getenv("LLM_MODEL_FILENAME", "") # Ignored for transformers
 LLM_MAX_TOKENS        = int(os.getenv("LLM_MAX_TOKENS",   "2048"))
 LLM_TEMPERATURE       = float(os.getenv("LLM_TEMPERATURE", "0.7"))
 LLM_TOP_P             = float(os.getenv("LLM_TOP_P",       "0.9"))
 LLM_TIMEOUT           = int(os.getenv("LLM_TIMEOUT",      "300"))
 
 # ── Embedding server (embed_llm.py — port 8003) ───────────────────────────────
-EMBED_BASE_URL        = os.getenv("EMBED_BASE_URL",  "http://127.0.0.1:8003")
+EMBED_BASE_URL        = os.getenv("EMBED_BASE_URL",  "https://127.0.0.1:8003")
 EMBED_EMBEDDINGS_URL  = f"{EMBED_BASE_URL}/v1/embeddings"
 EMBEDDING_MODEL       = os.getenv("EMBEDDING_MODEL", "BAAI/bge-m3")
 EMBEDDING_BATCH_SIZE  = int(os.getenv("EMBEDDING_BATCH_SIZE", "12"))
 EMBEDDING_TIMEOUT     = int(os.getenv("EMBEDDING_TIMEOUT",   "120"))
 
-# ── Weaviate & Security ──────────────────────────────────────────────────────
-WEAVIATE_URL          = os.getenv("WEAVIATE_URL", "http://127.0.0.1:8080")
-WEAVIATE_CLASS        = os.getenv("WEAVIATE_CLASS", "Document")
+# ── ChromaDB & Security ──────────────────────────────────────────────────────
+CHROMA_PERSIST_DIR    = os.getenv("CHROMA_PERSIST_DIR", str(BASE_DIR / "data" / "chroma_db"))
+CHROMA_COLLECTION     = os.getenv("CHROMA_COLLECTION", "Document")
 ENCRYPTION_KEY_FILE   = os.getenv("ENCRYPTION_KEY_FILE", str(BASE_DIR / "data" / "security.key"))
 
 # ── Neo4j ────────────────────────────────────────────────────────────────────

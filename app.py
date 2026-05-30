@@ -2,11 +2,13 @@
 
 """Document AI Expert — Flask Application."""
 from __future__ import annotations
-import os, uuid, json, threading, subprocess, logging, warnings
+import os
+os.environ["PYTHONWARNINGS"] = "ignore"
+import uuid, json, threading, subprocess, logging, warnings, signal, time
 from pathlib import Path
 
-# Suppress crewai ImportWarning
-warnings.filterwarnings("ignore", category=ImportWarning, module="importlib._bootstrap")
+warnings.filterwarnings("ignore", category=ImportWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 
 import sys
@@ -18,6 +20,12 @@ from agents.crew import run_ingest_crew, run_query_crew
 log = logging.getLogger("app")
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [app] %(levelname)s %(message)s")
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
+logging.getLogger("numexpr").setLevel(logging.ERROR)
+
+# Capture all Python warnings and route them to the py.warnings logger, then silence it
+logging.captureWarnings(True)
+logging.getLogger("py.warnings").setLevel(logging.ERROR)
 
 # ── App setup ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
@@ -29,25 +37,41 @@ os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
 _jobs: dict[str, dict] = {}
 
 
+# RBAC Session Tracking
+_active_sessions: dict[str, float] = {}
+SESSION_TIMEOUT_SECONDS = 600  # 10 minutes
+
 def _allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in config.ALLOWED_EXTENSIONS
 
 def is_admin() -> bool:
     return request.remote_addr in ("127.0.0.1", "::1", "localhost")
 
-def trigger_kv_cache_update():
+def get_session_token() -> str:
+    """Return session token if the user is not an admin, else 'admin'."""
+    if is_admin():
+        return "admin"
+    token = request.headers.get("X-Session-Token") or request.form.get("session_token")
+    if not token and request.json:
+        token = request.json.get("session_token")
+    if not token:
+        token = "anonymous"
+    _active_sessions[token] = time.time()
+    return token
+
+def trigger_kv_cache_update(session_token: str = "admin"):
     """Fetches all text and sends it to gen_llm to update KV cache."""
-    def _update():
+    def _update(token):
         from pipeline import vector_store
         import requests
-        text = vector_store.get_all_text()
+        text = vector_store.get_all_text(session_token=token)
         log.info("Triggering KV cache update with %d chars...", len(text))
         try:
-            requests.post(f"{config.LLM_BASE_URL}/v1/kv_cache", json={"text": text}, timeout=120)
+            requests.post(f"{config.LLM_BASE_URL}/v1/kv_cache", json={"text": text}, timeout=120, verify=False)
             log.info("KV Cache updated successfully.")
         except Exception as e:
             log.error("Failed to update KV Cache: %s", e)
-    threading.Thread(target=_update, daemon=True).start()
+    threading.Thread(target=_update, args=(session_token,), daemon=True).start()
 
 
 def _run_docker(action: str) -> tuple[bool, str]:
@@ -75,6 +99,37 @@ def _run_docker(action: str) -> tuple[bool, str]:
         return False, str(exc)
 
 
+# ── Graceful Shutdown ─────────────────────────────────────────────────────────
+
+def _graceful_shutdown(signum, frame):
+    log.error(f"Received signal {signum}. Triggering kill switch for graceful shutdown...")
+    _run_docker("down")
+    import time
+    time.sleep(1)
+    os._exit(0)
+
+signal.signal(signal.SIGINT, _graceful_shutdown)
+signal.signal(signal.SIGTERM, _graceful_shutdown)
+
+
+# ── Background Cleanup Agent ──────────────────────────────────────────────────
+
+def _cleanup_agent():
+    while True:
+        time.sleep(60)
+        now = time.time()
+        expired = [token for token, last_active in _active_sessions.items() 
+                   if token != "admin" and token != "anonymous" and (now - last_active) > SESSION_TIMEOUT_SECONDS]
+        for token in expired:
+            log.info(f"Cleanup Agent: Session '{token}' inactive for 10 mins. Purging data...")
+            vector_store.delete_by_session(token)
+            graph_store.delete_by_session(token)
+            del _active_sessions[token]
+            trigger_kv_cache_update(token)
+
+threading.Thread(target=_cleanup_agent, daemon=True).start()
+
+
 # ── Routes ────────────────────────────────────────────────────────────────────
 
 @app.route("/")
@@ -93,15 +148,22 @@ def status():
     gen_ok, embed_ok = False, False
     gen_info = {}
     try:
-        r = req.get(f"{config.LLM_BASE_URL}/health", timeout=3)
+        r = req.get(f"{config.LLM_BASE_URL}/health", timeout=3, verify=False)
         gen_ok = r.status_code == 200
         if gen_ok:
             gen_info = r.json()
+    except req.exceptions.ReadTimeout:
+        # LLM is busy generating, which is fine
+        gen_ok = True
+        gen_info = {"status": "busy", "model": config.LLM_MODEL_ID}
     except Exception as e:
         log.warning("Gen LLM status check failed: %s", e)
+        
     try:
-        r = req.get(f"{config.EMBED_BASE_URL}/health", timeout=3)
+        r = req.get(f"{config.EMBED_BASE_URL}/health", timeout=3, verify=False)
         embed_ok = r.status_code == 200
+    except req.exceptions.ReadTimeout:
+        embed_ok = True
     except Exception as e:
         log.warning("Embed LLM status check failed: %s", e)
 
@@ -126,7 +188,8 @@ def status():
 
 @app.route("/api/documents")
 def list_documents():
-    docs = vector_store.list_documents()
+    token = get_session_token()
+    docs = vector_store.list_documents(session_token=token)
     return jsonify({"documents": docs, "total": len(docs)})
 
 
@@ -153,7 +216,7 @@ def admin_purge():
         graph_store.purge()
         global _jobs
         _jobs.clear()
-        trigger_kv_cache_update()
+        trigger_kv_cache_update("admin")
         log.warning("Admin triggered database purge.")
         return jsonify({"ok": True, "msg": "Databases purged successfully."})
     except Exception as e:
@@ -191,7 +254,8 @@ def ingest():
 
     files = request.files.getlist("files")
     tier = request.form.get("tier", "extended")
-    log.info("Received %d file(s): %s to tier: %s", len(files), [f.filename for f in files], tier)
+    token = get_session_token()
+    log.info("Received %d file(s): %s to tier: %s (session: %s)", len(files), [f.filename for f in files], tier, token)
 
     if tier == "foundation" and not is_admin():
         return jsonify({"error": "Only admins can upload to the Foundation tier."}), 403
@@ -239,7 +303,8 @@ def ingest():
     }
     log.info("Job %s created for %d file(s)", job_id, len(saved_paths))
 
-    def _worker():
+    def _worker(sess_token):
+        config.current_session.set(sess_token)
         for path, orig_name in saved_paths:
             step_log = []
             try:
@@ -268,11 +333,11 @@ def ingest():
                 log.info("Job %s: %s embedded", job_id, orig_name)
 
                 # Step 4: store in vector DB
-                step_log.append(f"[{orig_name}] Storing in Weaviate (tier: {tier})…")
+                step_log.append(f"[{orig_name}] Storing in ChromaDB (tier: {tier}, session: {token})…")
                 doc_id  = uuid.uuid4().hex[:8]
-                added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier)
+                added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
                 step_log.append(f"[{orig_name}] Stored {added} chunks in vector DB (doc_id={doc_id}).")
-                log.info("Job %s: %s stored %d chunks in Weaviate", job_id, orig_name, added)
+                log.info("Job %s: %s stored %d chunks in ChromaDB", job_id, orig_name, added)
 
                 # Step 5: entity extraction → graph
                 if graph_store.is_available():
@@ -293,7 +358,7 @@ def ingest():
                     if start != -1 and end > start:
                         try:
                             entities = json.loads(raw[start:end])
-                            graph_store.store_entities(entities, orig_name, tier=tier)
+                            graph_store.store_entities(entities, orig_name, tier=tier, session_token=token)
                             step_log.append(f"[{orig_name}] Stored {len(entities)} entities in Neo4j.")
                         except json.JSONDecodeError as je:
                             step_log.append(f"[{orig_name}] Failed to parse JSON entities: {je}")
@@ -327,9 +392,9 @@ def ingest():
         _jobs[job_id]["status"] = "done"
         log.info("Job %s complete — %d results", job_id,
                  len(_jobs[job_id]["results"]))
-        trigger_kv_cache_update()
+        trigger_kv_cache_update(sess_token)
 
-    threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_worker, args=(token,), daemon=True).start()
     return jsonify({
         "job_id":   job_id,
         "files":    [p[1] for p in saved_paths],
@@ -353,11 +418,13 @@ def delete_document(source_name: str):
     if tier == "foundation" and not is_admin():
         return jsonify({"error": "Only admins can delete from the Foundation tier."}), 403
         
-    deleted_vec = vector_store.delete_document(source_name)
-    graph_store.delete_source(source_name)
+    token = get_session_token()
+    
+    deleted_vec = vector_store.delete_document(source_name, session_token=token)
+    graph_store.delete_source(source_name, session_token=token)
     log.info("Deleted %d chunks for '%s'", deleted_vec, source_name)
     
-    trigger_kv_cache_update()
+    trigger_kv_cache_update(token)
     
     return jsonify({"deleted_chunks": deleted_vec, "source": source_name})
 
@@ -372,29 +439,51 @@ def query():
     if not q:
         return jsonify({"error": "Empty query"}), 400
 
+    token = get_session_token()
+
     chunk_count = vector_store.count()
     if chunk_count == 0:
         return jsonify({"error": "No documents ingested yet. Please upload documents first."}), 400
 
     log.info("Query received (%d chars) | vector store has %d chunks", len(q), chunk_count)
 
-    def _generate():
-        yield "data: {\"status\": \"thinking\"}\n\n"
-        try:
-            answer, metrics = run_query_crew(q)
-            log.info("Query answered — %d chars", len(answer))
-            for i in range(0, len(answer), 80):
-                chunk   = answer[i:i + 80]
-                payload = json.dumps({"chunk": chunk})
-                yield f"data: {payload}\n\n"
-            yield f"data: {json.dumps({'metrics': metrics})}\n\n"
-            yield "data: {\"done\": true}\n\n"
-        except Exception as e:
-            log.exception("Query pipeline error")
-            yield f"data: {{\"error\": \"{str(e)}\"}}\n\n"
+    def _generate(sess_token):
+        import queue
+        q_events = queue.Queue()
+
+        def _run():
+            config.current_session.set(sess_token)
+            try:
+                def cb(status):
+                    q_events.put({"status": status})
+                ans, metrics = run_query_crew(q, session_token=token, status_callback=cb)
+                q_events.put({"done": True, "answer": ans, "metrics": metrics})
+            except Exception as e:
+                log.exception("Query pipeline error")
+                q_events.put({"error": str(e)})
+
+        threading.Thread(target=_run, daemon=True).start()
+
+        while True:
+            event = q_events.get()
+            if "error" in event:
+                yield f"data: {json.dumps({'error': event['error']})}\n\n"
+                break
+            elif "status" in event:
+                yield f"data: {json.dumps({'status': event['status']})}\n\n"
+            elif "done" in event:
+                answer = event["answer"]
+                log.info("Query answered — %d chars", len(answer))
+                for i in range(0, len(answer), 80):
+                    chunk   = answer[i:i + 80]
+                    payload = json.dumps({"chunk": chunk})
+                    yield f"data: {payload}\n\n"
+                yield f"data: {json.dumps({'metrics': event['metrics']})}\n\n"
+                yield "data: {\"done\": true}\n\n"
+                break
 
     return Response(
-        stream_with_context(_generate()),
+        stream_with_context(_generate(token)),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
@@ -412,6 +501,7 @@ def probe_gen():
             json={"prompt": "Hello, reply with one sentence.", "max_tokens": 64,
                   "temperature": 0.7, "top_p": 0.9},
             timeout=30,
+            verify=False,
         )
         r.raise_for_status()
         data = r.json()
@@ -431,6 +521,7 @@ def probe_embed():
             config.EMBED_EMBEDDINGS_URL,
             json={"input": "Document test sentence."},
             timeout=30,
+            verify=False,
         )
         r.raise_for_status()
         data = r.json()
@@ -451,7 +542,18 @@ if __name__ == "__main__":
     print("  Document AI Expert")
     print(f"  Gen LLM:   {config.LLM_COMPLETIONS_URL}  [{config.LLM_MODEL_ID}]")
     print(f"  Embed LLM: {config.EMBED_EMBEDDINGS_URL}  [{config.EMBEDDING_MODEL}]")
-    print(f"  Weaviate:  http://localhost:8080")
+    print(f"  ChromaDB:  {config.CHROMA_PERSIST_DIR}  (embedded)")
     print(f"  Neo4j:     {config.NEO4J_URI}")
     print("=" * 60)
-    app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)
+    
+    import urllib3
+    urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+    
+    cert_path = str(Path(__file__).parent / "cert.pem")
+    key_path = str(Path(__file__).parent / "key.pem")
+    
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        app.run(host="127.0.0.1", port=5050, debug=False, threaded=True, ssl_context=(cert_path, key_path))
+    else:
+        log.warning("SSL certificates not found! Running in HTTP mode.")
+        app.run(host="127.0.0.1", port=5050, debug=False, threaded=True)

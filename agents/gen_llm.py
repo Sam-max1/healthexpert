@@ -1,22 +1,23 @@
 # gen_llm.py
 # General-purpose LLM Generation Server — port 8002
 #
-# Model: Qwen/Qwen3-8B  (HuggingFace transformers)
-# Model card: https://huggingface.co/Qwen/Qwen3-8B
+# Model: Qwen/Qwen3-8B  (4-bit NF4 bitsandbytes quantization, ~5.5 GB VRAM)
 #
 # Exposes: POST /v1/completions  (OpenAI-compatible)
+#          POST /v1/kv_cache     (precompile KV cache for KB text)
 #          GET  /health
 #
 # Run: python agents/gen_llm.py
-#      → http://127.0.0.1:8002
+#      → https://127.0.0.1:8002
 
 from __future__ import annotations
 
 import os
-os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
+os.environ["PYTHONWARNINGS"] = "ignore"
+os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
+os.environ['TRANSFORMERS_VERBOSITY'] = 'error'
 
 import logging
-
 import torch
 from flask import Flask, request, jsonify
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -24,44 +25,53 @@ from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [gen_llm] %(levelname)s %(message)s",
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("gen_llm")
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 MODEL_NAME = os.getenv("GEN_MODEL_ID", "Qwen/Qwen3-8B")
 HOST       = os.getenv("GEN_HOST",    "127.0.0.1")
 PORT       = int(os.getenv("GEN_PORT", "8002"))
 
-# ── Device selection ──────────────────────────────────────────────────────────
-DEVICE     = "cuda" if torch.cuda.is_available() else "cpu"
-TORCH_DTYPE = torch.float16 if DEVICE == "cuda" else torch.float32
-
-# ── Model singleton ───────────────────────────────────────────────────────────
-# AutoModelForCausalLM + AutoTokenizer — standard Qwen3-8B model card pattern.
-# Model is loaded once at startup and kept alive for the process lifetime.
-
-log.info("Loading tokenizer: %s ...", MODEL_NAME)
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)  # nosec B615
-
-log.info("Loading model: %s on %s (%s) — using 4-bit quantization...",
-         MODEL_NAME, DEVICE, TORCH_DTYPE)
-
+# ── 4-bit NF4 quantization (bitsandbytes) ────────────────────────────────────
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
-    bnb_4bit_compute_dtype=TORCH_DTYPE,
     bnb_4bit_quant_type="nf4",
-    bnb_4bit_use_double_quant=True,
+    bnb_4bit_compute_dtype=torch.bfloat16,
+    bnb_4bit_use_double_quant=True,     # nested quantization saves ~0.4 GB additional
 )
 
-model = AutoModelForCausalLM.from_pretrained(  # nosec B615
-    MODEL_NAME,
-    torch_dtype=TORCH_DTYPE,
-    device_map="auto",
-    quantization_config=bnb_config if DEVICE == "cuda" else None,
-)
-model.eval()
-log.info("Model ready: %s", MODEL_NAME)
+# ── Model Initialization ───────────────────────────────────────────────────────
+log.info("Loading model %s with 4-bit NF4 quantization...", MODEL_NAME)
+try:
+    # device_map="auto" distributes layers across available GPU(s) / CPU
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_NAME,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+    )
+    model.eval()
+
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token_id = tokenizer.eos_token_id
+
+    # Determine active GPU for health reporting
+    _gpu_id = "cpu"
+    if torch.cuda.is_available():
+        _gpu_id = f"cuda:{torch.cuda.current_device()}"
+        vram_gb = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1e9
+        log.info("GPU: %s  |  VRAM: %.1f GB", _gpu_id, vram_gb)
+
+except Exception as e:
+    log.error("Failed to load model: %s", e)
+    raise
+
+log.info("Model ready! (%s, 4-bit NF4)", MODEL_NAME)
 
 # ── Flask app & KV Cache ──────────────────────────────────────────────────────
 precompiled_kv_cache = None
@@ -77,157 +87,166 @@ def kv_cache():
     if not kb_text:
         precompiled_kv_cache = None
         kv_cache_length = 0
-        if DEVICE == "cuda":
-            torch.cuda.empty_cache()
         return jsonify({"status": "cleared"})
-        
+
     log.info("Precompiling KV Cache for Knowledge Base (%d chars)", len(kb_text))
-    
-    prefix = f"<|im_start|>system\nYou are an expert analyst. Here is the entire Knowledge Base:\n{kb_text}<|im_end|>\n"
-    model_inputs = tokenizer([prefix], return_tensors="pt", truncation=True, max_length=120000).to(model.device)
-    
+
+    # Qwen ChatML system prompt prefix
+    prefix = (
+        f"<|im_start|>system\nYou are a helpful, respectful and honest assistant.\n\n"
+        f"Here is the entire Knowledge Base:\n{kb_text}\nUnderstood?<|im_end|>\n"
+        f"<|im_start|>user\nAcknowledge the Knowledge Base.<|im_end|>\n"
+        f"<|im_start|>assistant\nUnderstood."
+    )
+
+    inputs = tokenizer(prefix, return_tensors="pt").to(model.device)
     with torch.no_grad():
-        outputs = model(**model_inputs, use_cache=True)
-        precompiled_kv_cache = outputs.past_key_values
-        kv_cache_length = model_inputs.input_ids.shape[-1]
-        
+        outputs = model(**inputs, use_cache=True)
+
+    precompiled_kv_cache = outputs.past_key_values
+    kv_cache_length = inputs.input_ids.shape[1]
+
     return jsonify({
-        "status": "cached", 
+        "status": "cached",
         "tokens": kv_cache_length,
         "chars": len(kb_text)
     })
 
 
-
 @app.route("/health", methods=["GET"])
 def health():
     return jsonify({
-        "status": "ok", 
-        "model": MODEL_NAME,
-        "gpu_id": str(model.device),
-        "kv_cache_length": kv_cache_length
+        "status":           "ok",
+        "model":            MODEL_NAME,
+        "quantization":     "4-bit NF4 (bitsandbytes)",
+        "gpu_id":           _gpu_id,
+        "kv_cache_length":  kv_cache_length,
     })
 
 
 @app.route("/v1/completions", methods=["POST"])
 def completions():
-    """
-    OpenAI-compatible completions endpoint.
-
-    Follows the Qwen3-8B model card generation pattern:
-        model.generate(**model_inputs, max_new_tokens=..., temperature=..., top_p=...)
-
-    Request body (JSON):
-        {
-            "prompt":       str | list[str],  # required
-            "max_tokens":   int,              # optional, default 2048
-            "temperature":  float,            # optional, default 0.7
-            "top_p":        float,            # optional, default 0.9
-            "thinking_mode": bool             # optional, default false
-                                              # true → enables Qwen3 chain-of-thought
-        }
-
-    Response body (JSON):
-        {
-            "model":   str,
-            "choices": [{"index": 0, "text": str}]
-        }
-    """
+    """OpenAI-compatible completions endpoint."""
     data: dict = request.get_json(force=True) or {}
 
     raw_prompt = data.get("prompt", "")
     if not raw_prompt:
         return jsonify({"error": "Field 'prompt' is required."}), 400
 
-    # Accept a single string or a list (batch)
     prompts: list[str] = raw_prompt if isinstance(raw_prompt, list) else [raw_prompt]
 
     max_new_tokens = int(  data.get("max_tokens",   2048))
     temperature    = float(data.get("temperature",  0.7))
-    top_p          = float(data.get("top_p",        0.9))
+    top_p          = float(data.get("top_p",        0.95))
     thinking_mode  = bool( data.get("thinking_mode", False))
     use_kv_cache   = bool( data.get("use_kv_cache",  False))
 
     choices = []
+    total_prompt_tokens = 0
+    total_completion_tokens = 0
 
     for i, prompt in enumerate(prompts):
         if use_kv_cache and precompiled_kv_cache is not None:
-            text = f"<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
-            model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-            current_len = model_inputs.input_ids.shape[-1]
-            attention_mask = torch.ones((1, kv_cache_length + current_len), device=model.device, dtype=torch.long)
-            position_ids = torch.arange(kv_cache_length, kv_cache_length + current_len, device=model.device).unsqueeze(0)
-            cache_position = torch.arange(kv_cache_length, kv_cache_length + current_len, device=model.device)
-            
-            if hasattr(precompiled_kv_cache, "to_legacy_cache"):
-                from transformers.cache_utils import DynamicCache
-                past_kv = DynamicCache.from_legacy_cache(precompiled_kv_cache.to_legacy_cache())
-            else:
-                past_kv = precompiled_kv_cache
-                
-            with torch.no_grad():
-                generated_ids = model.generate(
-                    input_ids=model_inputs.input_ids,
-                    attention_mask=attention_mask,
-                    position_ids=position_ids,
-                    cache_position=cache_position,
-                    past_key_values=past_kv,
-                    max_new_tokens=max_new_tokens,
-                    temperature=temperature,
-                    top_p=top_p,
-                    do_sample=True,
-                )
-        else:
-            messages = [{"role": "user", "content": prompt}]
-            text = tokenizer.apply_chat_template(
-                messages,
-                tokenize          = False,
-                add_generation_prompt = True,
-                enable_thinking   = thinking_mode,
+            # System prompt already in KV cache — only pass the user turn
+            text = f"\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+
+            inputs = tokenizer(text, return_tensors="pt").to(model.device)
+            curr_length = inputs.input_ids.shape[1]
+            attention_mask = torch.ones(
+                (1, kv_cache_length + curr_length), device=model.device
             )
-            model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
-            
+
+            eos_token_id = tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
             with torch.no_grad():
-                generated_ids = model.generate(
-                    **model_inputs,
-                    max_new_tokens = max_new_tokens,
-                    temperature    = temperature,
-                    top_p          = top_p,
-                    do_sample      = True,
+                outputs = model.generate(
+                    input_ids=inputs.input_ids,
+                    attention_mask=attention_mask,
+                    past_key_values=precompiled_kv_cache,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else 1.0,
+                    top_p=top_p,
+                    do_sample=temperature > 0,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=eos_token_id,
                 )
 
-        # Strip the input tokens to return only the new text
-        output_ids = generated_ids[0][model_inputs.input_ids.shape[-1]:]
+            new_tokens = outputs[0][curr_length:]
+            answer_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
 
-        # ── Decode: separate <think> block from visible answer ─────────────
-        # Qwen3 thinking mode wraps reasoning in <think>...</think> tags.
-        # We surface both so callers can use either.
-        full_output = tokenizer.decode(output_ids, skip_special_tokens=True).strip()
+            prompt_len = curr_length + kv_cache_length
+            completion_len = len(new_tokens)
 
-        think_text, answer_text = "", full_output
+        else:
+            text = (
+                f"<|im_start|>system\nYou are a helpful, respectful and honest assistant."
+                f"<|im_end|>\n<|im_start|>user\n{prompt}<|im_end|>\n<|im_start|>assistant\n"
+            )
+
+            inputs = tokenizer(text, return_tensors="pt").to(model.device)
+            eos_token_id = tokenizer.encode("<|im_end|>", add_special_tokens=False)[0]
+
+            with torch.no_grad():
+                outputs = model.generate(
+                    input_ids=inputs.input_ids,
+                    attention_mask=inputs.attention_mask,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else 1.0,
+                    top_p=top_p,
+                    do_sample=temperature > 0,
+                    pad_token_id=tokenizer.pad_token_id,
+                    eos_token_id=eos_token_id,
+                )
+
+            new_tokens = outputs[0][inputs.input_ids.shape[1]:]
+            answer_text = tokenizer.decode(new_tokens, skip_special_tokens=True).strip()
+
+            prompt_len = inputs.input_ids.shape[1]
+            completion_len = len(new_tokens)
+
+        total_prompt_tokens     += prompt_len
+        total_completion_tokens += completion_len
+
+        # ── Separate <think> block from visible answer ─────────────────────
+        full_output = answer_text
+        think_text  = ""
         if thinking_mode and "<think>" in full_output:
             think_end = full_output.find("</think>")
             if think_end != -1:
                 think_text  = full_output[len("<think>"):think_end].strip()
                 answer_text = full_output[think_end + len("</think>"):].strip()
 
-        log.info("Prompt %d → %d new tokens (thinking=%s)", i, len(output_ids), thinking_mode)
+        log.debug("Prompt %d → %d new tokens (thinking=%s)", i, completion_len, thinking_mode)
 
         choices.append({
-            "index":   i,
-            "text":    answer_text,
-            "thinking": think_text,   # empty string when thinking_mode=False
+            "index":    i,
+            "text":     answer_text,
+            "thinking": think_text,
         })
 
-    if DEVICE == "cuda":
-        torch.cuda.empty_cache()
-
-    return jsonify({"model": MODEL_NAME, "choices": choices})
+    return jsonify({
+        "model":   MODEL_NAME,
+        "choices": choices,
+        "usage": {
+            "prompt_tokens":     total_prompt_tokens,
+            "completion_tokens": total_completion_tokens,
+        }
+    })
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import signal, sys
+
+    def sigint_handler(sig, frame):
+        log.info("SIGINT received, shutting down gen_llm gracefully...")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, sigint_handler)
+
     log.info("Starting gen_llm server on %s:%d", HOST, PORT)
-    log.info("Model: %s | Device: %s | CUDA: %s", MODEL_NAME, DEVICE, torch.cuda.is_available())
-    # threaded=False — PyTorch CUDA is not fork-safe; requests are handled serially
-    app.run(host=HOST, port=PORT, debug=False, threaded=False)
+    cert_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cert.pem")
+    key_path  = os.path.join(os.path.dirname(os.path.dirname(__file__)), "key.pem")
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        app.run(host=HOST, port=PORT, debug=False, threaded=False,
+                ssl_context=(cert_path, key_path))
+    else:
+        app.run(host=HOST, port=PORT, debug=False, threaded=False)

@@ -12,14 +12,15 @@ from pydantic import Field
 class LocalLLM(BaseLLM):
     """CrewAI-compatible wrapper for the local OpenAI-compatible completions endpoint."""
 
-    model:       str   = Field(default_factory=lambda: config.LLM_MODEL_ID)
-    base_url:    str   = Field(default_factory=lambda: config.LLM_BASE_URL)
-    max_tokens:  int   = Field(default_factory=lambda: config.LLM_MAX_TOKENS)
-    temperature: float = Field(default_factory=lambda: config.LLM_TEMPERATURE)
-    top_p:       float = Field(default_factory=lambda: config.LLM_TOP_P)
-    timeout:     int   = Field(default_factory=lambda: config.LLM_TIMEOUT)
-
-    use_kv_cache: bool = Field(default=False)
+    def __init__(self, **kwargs):
+        kwargs.setdefault("model", config.LLM_MODEL_ID)
+        kwargs.setdefault("base_url", config.LLM_BASE_URL)
+        super().__init__(**kwargs)
+        self.max_tokens = kwargs.get("max_tokens", config.LLM_MAX_TOKENS)
+        self.temperature = kwargs.get("temperature", config.LLM_TEMPERATURE)
+        self.top_p = kwargs.get("top_p", config.LLM_TOP_P)
+        self.timeout = kwargs.get("timeout", config.LLM_TIMEOUT)
+        self.use_kv_cache = kwargs.get("use_kv_cache", False)
 
     def call(self, messages: list[dict], callbacks: list[Any] | None = None, **kwargs: Any) -> str:
         # Flatten conversation history into a single string since gen_llm.py wraps it in a user role
@@ -39,9 +40,14 @@ class LocalLLM(BaseLLM):
                 f"{self.base_url}/v1/completions",
                 json=payload,
                 timeout=self.timeout,
+                verify=False,
             )
             resp.raise_for_status()
-            return resp.json()["choices"][0]["text"].strip()
+            data = resp.json()
+            usage = data.get("usage")
+            if usage:
+                self._track_token_usage_internal(usage)
+            return data["choices"][0]["text"].strip()
         except requests.exceptions.ConnectionError:
             return "[LLM ERROR] Cannot connect to local endpoint. Is the AMD/Nvidia server running?"
         except Exception as e:

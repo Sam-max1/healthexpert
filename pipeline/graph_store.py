@@ -55,7 +55,7 @@ def is_available() -> bool:
     return _available
 
 
-def store_entities(entities: list[dict], source: str, tier: str = "extended") -> None:
+def store_entities(entities: list[dict], source: str, tier: str = "extended", session_token: str = "admin") -> None:
     """
     entities: [{"name": str, "type": str, "relations": [{"target": str, "rel": str}]}]
     """
@@ -64,26 +64,37 @@ def store_entities(entities: list[dict], source: str, tier: str = "extended") ->
         return
     with d.session() as s:
         for ent in entities:
+            if not isinstance(ent, dict):
+                continue
+            ent_name = ent.get("name") or ent.get("entity") or ent.get("id")
+            if not ent_name:
+                continue
             s.run(
                 """
                 MERGE (e:Entity {name: $name})
-                SET e.type = $type, e.source = $source, e.tier = $tier
+                SET e.type = $type, e.source = $source, e.tier = $tier, e.session_token = $session_token
                 """,
-                name=ent["name"], type=ent.get("type", "General"), source=source, tier=tier,            )
+                name=ent_name, type=ent.get("type", "General"), source=source, tier=tier, session_token=session_token
+            )
             for rel in ent.get("relations", []):
+                if not isinstance(rel, dict):
+                    continue
+                tgt = rel.get("target") or rel.get("to")
+                if not tgt:
+                    continue
                 s.run(
                     """
                     MERGE (a:Entity {name: $src})
                     MERGE (b:Entity {name: $tgt})
                     MERGE (a)-[r:RELATES_TO {type: $rel}]->(b)
-                    SET r.source = $source, r.tier = $tier
+                    SET r.source = $source, r.tier = $tier, r.session_token = $session_token
                     """,
-                    src=ent["name"], tgt=rel["target"],
-                    rel=rel.get("rel", "related_to"), source=source, tier=tier,
+                    src=ent_name, tgt=tgt,
+                    rel=rel.get("rel", "related_to"), source=source, tier=tier, session_token=session_token
                 )
 
 
-def query_related(entity_names: list[str], hops: int = 2) -> list[str]:
+def query_related(entity_names: list[str], hops: int = 2, session_token: str = "admin") -> list[str]:
     """Return text snippets of related entities within `hops` graph hops."""
     d = _get_driver()
     if not d:
@@ -94,24 +105,38 @@ def query_related(entity_names: list[str], hops: int = 2) -> list[str]:
             records = s.run(
                 f"""
                 MATCH (e:Entity {{name: $name}})
+                WHERE e.tier = 'foundation' OR e.session_token = $session_token OR $session_token = 'admin'
                 OPTIONAL MATCH (e)-[r:RELATES_TO*1..{hops}]-(related)
-                WHERE related IS NOT NULL
+                WHERE related IS NOT NULL AND (related.tier = 'foundation' OR related.session_token = $session_token OR $session_token = 'admin')
                 RETURN DISTINCT related.name AS name, related.type AS type
                 LIMIT $limit
                 """,
-                name=name, limit=config.TOP_K_GRAPH * 3,
+                name=name, limit=config.TOP_K_GRAPH * 3, session_token=session_token
             ).data()
             for rec in records:
                 results.append(f"{rec['name']} ({rec['type']})")
     return results[:config.TOP_K_GRAPH * 3]
 
 
-def delete_source(source: str) -> None:
+def delete_source(source: str, session_token: str = "admin") -> None:
     d = _get_driver()
     if not d:
         return
     with d.session() as s:
-        s.run("MATCH (e:Entity {source: $source}) DETACH DELETE e", source=source)
+        if session_token == "admin":
+            s.run("MATCH (e:Entity {source: $source}) DETACH DELETE e", source=source)
+        else:
+            s.run("MATCH (e:Entity {source: $source, session_token: $session_token}) DETACH DELETE e", 
+                  source=source, session_token=session_token)
+
+def delete_by_session(session_token: str) -> None:
+    if session_token in ("admin", "anonymous", ""):
+        return
+    d = _get_driver()
+    if not d:
+        return
+    with d.session() as s:
+        s.run("MATCH (e:Entity {session_token: $session_token}) DETACH DELETE e", session_token=session_token)
 
 
 def get_stats() -> dict:

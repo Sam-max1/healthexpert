@@ -23,7 +23,7 @@
 **HealthExpert** is an enterprise-grade AI document analysis platform combining:
 
 - **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
-- **🔍 Hybrid RAG Architecture**: Vector DB (Weaviate) + Graph DB (Neo4j) for comprehensive retrieval
+- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + DB25) + Graph DB (Neo4j) for comprehensive retrieval
 - **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
 - **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
 - **🌐 Web UI**: Real-time streaming responses with source citations
@@ -74,7 +74,7 @@
 │Processing│ │Qwen3-8B    │ │ BAAI/bge-m3  │
 └────┬────┘ └───────────┘ └──────────────┘
      │
-     ├─→ Weaviate (Vector Store)
+     ├─→ ChromaDB (Vector Store, embedded, DB25 hybrid search)
      └─→ Neo4j (Graph DB)
 ```
 
@@ -90,8 +90,9 @@ User Upload
 [Embedder] → Generate dense/sparse embeddings (BAAI/bge-m3)
     ↓
 ┌─────────────────────────────────────────┐
-│ [Weaviate] Vector Store                 │
+│ [ChromaDB] Vector Store (embedded)      │
 │ Stores: chunks + embeddings + metadata  │
+│ Search: DB25 (Dense ANN + BM25 / RRF)   │
 └─────────────────────────────────────────┘
     ↓
 [Entity Extraction] → LLM-powered entity detection
@@ -233,7 +234,7 @@ healthexpert/
 │   ├── document_loader.py                   # Multi-format document loader
 │   ├── chunker.py                           # Text chunking (512 tokens)
 │   ├── embedder.py                          # Embedding HTTP client
-│   ├── vector_store.py                      # Weaviate integration
+│   ├── vector_store.py                      # ChromaDB + DB25 hybrid search
 │   └── graph_store.py                       # Neo4j integration
 │
 ├── templates/                               # Web UI (HTML)
@@ -267,9 +268,9 @@ EMBEDDING_MODEL=BAAI/bge-m3
 EMBEDDING_BATCH_SIZE=12
 EMBEDDING_TIMEOUT=120
 
-# Weaviate
-WEAVIATE_URL=http://127.0.0.1:8080
-WEAVIATE_CLASS=Document
+# Vector Database (ChromaDB — embedded, no server required)
+CHROMA_PERSIST_DIR=./data/chroma_db
+CHROMA_COLLECTION=Document
 ENCRYPTION_KEY_FILE=./data/security.key
 
 # Neo4j
@@ -424,7 +425,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [CrewAI](https://crewai.com/) - Multi-agent framework
 - [LangChain](https://langchain.com/) - LLM orchestration
-- [Weaviate](https://weaviate.io/) - Vector database
+- [ChromaDB](https://www.trychroma.com/) - Embedded vector database
+- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for DB25 hybrid search
 - [Neo4j](https://neo4j.com/) - Graph database
 - [Qwen](https://qwenlm.github.io/) - LLM models
 - [BAAI BGE](https://github.com/FlagOpen/FlagEmbedding) - Embedding models

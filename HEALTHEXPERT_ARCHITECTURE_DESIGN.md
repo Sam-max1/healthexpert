@@ -35,12 +35,12 @@ graph TB
     end
 
     subgraph Stores["Knowledge Stores"]
-        O[(Weaviate\nVector Store\nTier: Foundation / Extended)]
+        O[(ChromaDB\nVector Store\nEmbedded · DB25 Hybrid Search\nTier: Foundation / Extended)]
         P[(Neo4j\nGraph DB\nTier: Foundation / Extended)]
     end
 
     subgraph GenLLM["Gen LLM Server — agents/gen_llm.py (port 8002)"]
-        Q[transformers AutoModelForCausalLM\nQwen/Qwen3-8B\nPOST /v1/completions\nPOST /v1/kv_cache]
+        Q[transformers AutoModelForCausalLM\nQwen/Qwen3-8B · 4-bit NF4\nPOST /v1/completions\nPOST /v1/kv_cache]
     end
 
     subgraph EmbedLLM["Embed LLM Server — agents/embed_llm.py (port 8003)"]
@@ -75,7 +75,7 @@ sequenceDiagram
     participant CH as Chunker
     participant EM as embedder.py (HTTP client)
     participant ES as embed_llm.py :8003
-    participant VDB as Weaviate
+    participant VDB as ChromaDB (embedded)
     participant GS as gen_llm.py :8002
     participant GDB as Neo4j
 
@@ -121,7 +121,7 @@ sequenceDiagram
     alt KV Cache Success
         GS-->>CA: Precompiled Full-Document Inference
     else KV Cache Failure
-        CA->>VDB: Fallback standard vector search
+        CA->>VDB: Fallback DB25 hybrid search (Dense + BM25)
         CA->>GDB: Fallback standard graph search
     end
     
@@ -148,7 +148,8 @@ sequenceDiagram
 |---|---|
 | **Port** | `8002` |
 | **Model** | `Qwen/Qwen3-8B` |
-| **Backend** | `transformers` AutoModelForCausalLM (device_map=auto) |
+| **Quantization** | 4-bit NF4 (bitsandbytes) — ~5.5 GB VRAM |
+| **Backend** | `transformers` AutoModelForCausalLM (`device_map="auto"`) |
 | **Start** | `python agents/gen_llm.py` |
 | **Endpoints** | `GET /health`, `POST /v1/completions`, `POST /v1/kv_cache` |
 
@@ -167,6 +168,17 @@ sequenceDiagram
 {
   "model": "Qwen/Qwen3-8B",
   "choices": [{ "index": 0, "text": " Paris.", "thinking": "" }]
+}
+```
+
+**Health Response:**
+```json
+{
+  "status": "ok",
+  "model": "Qwen/Qwen3-8B",
+  "quantization": "4-bit NF4 (bitsandbytes)",
+  "gpu_id": "cuda:0",
+  "kv_cache_length": 1024
 }
 ```
 
@@ -211,16 +223,16 @@ sequenceDiagram
 
 | Component | File | Responsibility |
 |---|---|---|
-| **Gen LLM Server** | `agents/gen_llm.py` | Flask :8002 — transformers AutoModelForCausalLM, `/v1/completions`, `/v1/kv_cache`, `/health` |
+| **Gen LLM Server** | `agents/gen_llm.py` | Flask :8002 — Qwen/Qwen3-8B 4-bit NF4, `/v1/completions`, `/v1/kv_cache`, `/health` |
 | **Embed LLM Server** | `agents/embed_llm.py` | Flask :8003 — BGEM3 dense/sparse/ColBERT, `/v1/embeddings`, `/v1/embeddings/multi`, `/health` |
-| Config | `config.py` | All settings; LLM_BASE_URL (8002) + EMBED_BASE_URL (8003); override via env vars |
+| Config | `config.py` | All settings; LLM_BASE_URL (8002) + EMBED_BASE_URL (8003); ChromaDB path; override via env vars |
 | Local LLM | `agents/llm.py` | LangChain wrapper → `POST /v1/completions` on port 8002 |
 | Embedder | `pipeline/embedder.py` | HTTP client → `POST /v1/embeddings` on port 8003 |
 | Tools | `agents/tools.py` | 5 CrewAI `@tool` functions |
 | Crew | `agents/crew.py` | Phase 1 (KV Cache), Phase 2 (Gatekeeper), Phase 3 (Analyst) |
 | Document Loader | `pipeline/document_loader.py` | Parse 9 file formats; OCR for images |
-| Chunker | `pipeline/chunker.py` | Recursive splitting (langchain_text_splitters 1.x), flat chunk dicts |
-| Vector Store | `pipeline/vector_store.py` | Weaviate CRUD, cosine similarity, tier support |
+| Chunker | `pipeline/chunker.py` | Recursive splitting (langchain_text_splitters), flat chunk dicts |
+| Vector Store | `pipeline/vector_store.py` | **ChromaDB** CRUD, **DB25 hybrid search** (Dense + BM25 via RRF), tier support |
 | Graph Store | `pipeline/graph_store.py` | Neo4j CRUD, OPTIONAL MATCH, tier support |
 | Flask App | `app.py` | REST API + Docker control + Tier Access Admin Auth + KV trigger + Health Metrics |
 | CLI | `healthexpert.py` | Standalone command-line interface |
@@ -236,13 +248,15 @@ sequenceDiagram
 | Layer | Technology | Version | Reason |
 |---|---|---|---|
 | Web Framework | Flask | 3.0+ | Lightweight, SSE support |
-| Agent Orchestration | CrewAI | 0.36+ | Multi-agent pipelines (Tracing Enabled) |
+| Agent Orchestration | CrewAI | 0.36+ | Multi-agent pipelines |
 | LLM Chaining | LangChain | 0.2+ | LLM abstraction, text splitting |
-| LLM Backend | transformers | 4.57+ | Standard HuggingFace inference, CUDA device_map=auto |
+| LLM Backend | transformers | 4.57+ | Standard HuggingFace inference, `device_map="auto"` |
 | LLM Model | Qwen/Qwen3-8B | — | 8B params, 131K context, dual thinking/standard mode |
+| LLM Quantization | bitsandbytes | 0.43+ | 4-bit NF4, nested quant — ~5.5 GB VRAM |
 | Embedding Backend | FlagEmbedding | — | BGEM3FlagModel, fp16 |
 | Embedding Model | BAAI/bge-m3 | — | 1024-dim dense + sparse + ColBERT |
-| Vector Database | Weaviate | 0.5+ | Persistent, cosine similarity, no server needed |
+| Vector Database | **ChromaDB** | 0.5+ | Embedded persistent store — no server required |
+| Hybrid Search | **rank-bm25** | 0.2+ | BM25 scorer for DB25 (Dense + BM25) keyword fusion |
 | Graph Database | Neo4j Community | 5.18 | APOC plugins, multi-hop traversal |
 | PDF | PyMuPDF (fitz) | 1.24+ | Fast, accurate text extraction |
 | DOCX | python-docx | 1.1+ | Paragraph-level extraction |
@@ -252,14 +266,46 @@ sequenceDiagram
 
 ---
 
-## LLM Selection Criteria
+## DB25 Hybrid Search
 
-This section documents the rationale behind the two model choices powering the generic pipeline.
+**DB25** = **D**ense vector search + **B**M**25** keyword scoring, fused via **Reciprocal Rank Fusion (RRF)**.
+
+Implemented entirely in `pipeline/vector_store.py` — no external service required.
+
+### How It Works
+
+```
+query(query_embedding, keyword="coverage limit")
+  │
+  ├─ Step 1: Dense ANN (ChromaDB cosine)
+  │   Fetch top_k × 4 candidates by vector similarity
+  │
+  ├─ Step 2: BM25 scoring (rank_bm25)
+  │   Score same candidate pool using tokenised keyword query
+  │
+  └─ Step 3: RRF Fusion
+      score = 1/(60 + dense_rank) + 1/(60 + bm25_rank)
+      Sort descending → return top_k
+```
+
+### Advantages
+
+| Property | Pure Dense | Pure BM25 | DB25 (Hybrid) |
+|---|---|---|---|
+| Semantic similarity | ✅ Strong | ❌ None | ✅ Strong |
+| Exact keyword match | ❌ Weak | ✅ Strong | ✅ Strong |
+| Handles typos / paraphrase | ✅ | ❌ | ✅ |
+| Recall | Moderate | Moderate | **High** |
+| Precision for precise terms | Low | High | **High** |
+
+When `keyword=None` (e.g., internal KV cache calls), the system falls back to pure dense search.
+
+---
+
+## LLM Selection Criteria
 
 ### 🔍 Embedding Model — BAAI/bge-m3
 **Best for: Complex Hybrid Search (Dense + Sparse + ColBERT)**
-
-If your RAG pipeline requires advanced retrieval logic, the BGE-M3 model is a powerhouse. This is the model running inside `agents/embed_llm.py` on port 8003.
 
 | Property | Detail |
 |---|---|
@@ -279,39 +325,35 @@ If your RAG pipeline requires advanced retrieval logic, the BGE-M3 model is a po
   - **Sparse vectors** — keyword-based weights (BM25-style lexical matching)
   - **ColBERT vectors** — token-level interaction for fine-grained re-ranking
 
-**Why it fits this pipeline:** Complex documents contain precise language where keyword matching matters as much as semantic similarity. BGE-M3's hybrid retrieval captures both semantic intent and exact terminology — this is why the `/v1/embeddings/multi` endpoint is exposed alongside the standard `/v1/embeddings`.
-
 ---
 
-### 🧠 Generation Model — Qwen3-8B (nvidia/Qwen3-8B-FP8)
+### 🧠 Generation Model — Qwen3-8B (4-bit NF4 Quantization)
 **The 2026 Powerhouse: Best Sub-10B Reasoning Model**
-
-If you want the highest possible reasoning performance in a compact footprint, Qwen3-8B is the current undisputed leader in its class. This is the model running inside `agents/gen_llm.py` on port 8002.
 
 | Property | Detail |
 |---|---|
 | **Parameters** | ~8.2B |
-| **VRAM (float16)** | ~16 GB (4-bit quant: ~5.5 GB) |
+| **VRAM (float16)** | ~16 GB |
+| **VRAM (4-bit NF4)** | ~5.5 GB ✅ |
 | **Context Window** | 131,072 tokens (131K) |
-| **Quantization** | float16 default (use bitsandbytes for 4-bit) |
+| **Quantization** | `BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=bfloat16, bnb_4bit_use_double_quant=True)` |
 | **Architecture** | Dual-mode: Thinking + Standard |
-| **Inference Backend** | HuggingFace `transformers` + PyTorch |
+| **Inference Backend** | HuggingFace `transformers` + bitsandbytes |
 
-**Why "dual-mode architecture"?** Qwen3-8B uniquely switches between two operating modes in the same model weights:
-
-- 🧩 **Thinking Mode** — activates a chain-of-thought reasoning loop for complex multi-step logic. Ideal for synthesizing contradictory policy clauses, resolving ambiguity in regulatory documents, or answering questions that require multi-hop inference across retrieved passages.
-- ⚡ **Standard Mode** — fast, direct dialogue generation for simple extraction queries where latency matters more than depth.
-
-**Why it fits this pipeline:** Complex documents require *synthesis*, not just extraction. When a user asks a complex question, the answer may span multiple retrieved chunks with potentially conflicting language. Qwen3-8B's reasoning capability ensures the analyst agent produces accurate, citation-grounded answers — not hallucinated ones. The agent is strictly instructed to return a zero-retrieval guardrail message if the information is missing. The 131K context window also means entire documents can be passed without chunking loss in edge cases.
+**Why 4-bit NF4?**
+- **NF4 (NormalFloat 4-bit)**: Optimal quantization type for normally-distributed weights — superior quality vs INT4.
+- **Double quantization**: Quantizes the quantization constants themselves, saving ~0.4 GB additional VRAM.
+- **bfloat16 compute**: Maintains numerical stability during forward passes despite 4-bit storage.
+- **Net result**: ~3× VRAM reduction (16 GB → 5.5 GB) with minimal quality degradation.
 
 ---
 
 ### Selection Summary
 
-| Criterion | BAAI/bge-m3 (port 8003) | Qwen3-8B-FP8 (port 8002) |
+| Criterion | BAAI/bge-m3 (port 8003) | Qwen3-8B NF4 (port 8002) |
 |---|---|---|
 | **Role** | Embedding / Retrieval | Text Generation / Synthesis |
-| **VRAM** | ~2 GB | ~16 GB (fp16) / ~5.5 GB (4-bit) |
+| **VRAM** | ~2 GB | ~5.5 GB (4-bit NF4) |
 | **Strength** | Hybrid search (dense + sparse + ColBERT) | Complex reasoning + long context |
 | **Context** | 8,192 tokens | 131,072 tokens |
 | **Key feature** | Three vector types in one pass | Dual thinking/standard mode |
@@ -324,11 +366,11 @@ If you want the highest possible reasoning performance in a compact footprint, Q
 ### 🗂️ Ingestor Agent
 - **Role**: Document Ingestion Specialist
 - **Tools**: `IngestDocumentTool`, `ExtractAndStoreEntitiesTool`
-- **Process**: Load → Chunk → Embed (via port 8003) → Store (Weaviate) → Extract entities (via port 8002) → Store graph (Neo4j)
+- **Process**: Load → Chunk → Embed (via port 8003) → Store (**ChromaDB**) → Extract entities (via port 8002) → Store graph (Neo4j)
 
 ### 🔍 Retriever Agent
 - **Status**: Replaced by KV Cache Inference fallback logic.
-- **Process**: Directly calls vector/graph search functions when KV Cache fails, rather than using a dedicated agent.
+- **Process**: Directly calls **DB25 vector search** and graph search functions when KV Cache fails.
 
 ### 📊 Analyst Agent
 - **Role**: Information Analyst
@@ -342,25 +384,24 @@ If you want the highest possible reasoning performance in a compact footprint, Q
 ### Quick Start (Local)
 
 ```bash
-# ── One-time setup (run once, then log out / log back in) ─────────────────────
+# ── One-time setup ─────────────────────────────────────────────────────────────
 
-# Install Docker Compose V2 plugin (no sudo required)
+# Install Docker Compose V2 plugin (for Neo4j only)
 mkdir -p ~/.docker/cli-plugins
 curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
      -o ~/.docker/cli-plugins/docker-compose
 chmod +x ~/.docker/cli-plugins/docker-compose
 docker compose version          # → Docker Compose version v5.x.x
 
-# Add your user to the docker group so you can run docker without sudo
-# (requires password; takes effect after next login)
+# Add your user to the docker group
 sudo usermod -aG docker $USER
 newgrp docker                   # activate in the current shell immediately
 
 # ── Per-session startup ────────────────────────────────────────────────────────
 
-# 1. Start Neo4j
+# 1. Start Neo4j graph database (ChromaDB is embedded — no docker needed for vector DB)
 cd /source/python/code/healthexpert
-docker compose up -d            # no 'version:' warning — docker-compose.yml is V2-clean
+docker compose up -d
 
 # 2. Install Python dependencies
 pip install -r requirements.txt
@@ -370,15 +411,16 @@ sudo apt-get install -y tesseract-ocr
 
 # 4. Start the Gen LLM server (port 8002)  — in a dedicated terminal
 python agents/gen_llm.py
-# → http://127.0.0.1:8002/v1/completions
+# → https://127.0.0.1:8002/v1/completions  (Qwen/Qwen3-8B, 4-bit NF4)
 
 # 5. Start the Embed LLM server (port 8003) — in a dedicated terminal
 python agents/embed_llm.py
-# → http://127.0.0.1:8003/v1/embeddings
+# → https://127.0.0.1:8003/v1/embeddings
 
 # 6. Start the Flask web app (port 5050)   — in a dedicated terminal
 python app.py
-# → http://127.0.0.1:5050
+# → https://127.0.0.1:5050
+# ChromaDB will auto-create data/chroma_db/ on first ingest
 
 # 7. Or use CLI (requires both servers running)
 python healthexpert.py ingest policy.pdf
@@ -391,20 +433,22 @@ python healthexpert.py status
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_BASE_URL` | `http://127.0.0.1:8002` | Gen LLM server URL (gen_llm.py) |
-| `LLM_MODEL_ID` | `nvidia/Qwen3-8B-FP8` | Model identifier |
+| `LLM_BASE_URL` | `https://127.0.0.1:8002` | Gen LLM server URL (gen_llm.py) |
+| `LLM_MODEL_ID` | `Qwen/Qwen3-8B` | Model identifier |
 | `GEN_HOST` | `127.0.0.1` | gen_llm.py bind host |
 | `GEN_PORT` | `8002` | gen_llm.py bind port |
-| `EMBED_BASE_URL` | `http://127.0.0.1:8003` | Embed LLM server URL (embed_llm.py) |
+| `EMBED_BASE_URL` | `https://127.0.0.1:8003` | Embed LLM server URL (embed_llm.py) |
 | `EMBEDDING_MODEL` | `BAAI/bge-m3` | Embedding model identifier |
 | `EMBED_HOST` | `127.0.0.1` | embed_llm.py bind host |
 | `EMBED_PORT` | `8003` | embed_llm.py bind port |
 | `EMBED_FP16` | `true` | Use FP16 for embedding inference |
 | `EMBED_MAX_LENGTH` | `8192` | Max token length for bge-m3 |
+| `CHROMA_PERSIST_DIR` | `data/chroma_db` | ChromaDB persistent storage directory |
+| `CHROMA_COLLECTION` | `Document` | ChromaDB collection name |
 | `NEO4J_URI` | `bolt://localhost:7687` | Neo4j bolt URI |
 | `NEO4J_PASSWORD` | `healthexpert` | Neo4j password |
 | `CHUNK_SIZE` | `512` | Characters per chunk |
-| `TOP_K_VECTOR` | `5` | Vector search top-K |
+| `TOP_K_VECTOR` | `5` | Vector search top-K (DB25 returns top-K after fusion) |
 
 ---
 
@@ -412,9 +456,9 @@ python healthexpert.py status
 
 The application provides a suite of powerful administrative capabilities accessible only when the UI is loaded from `localhost` (127.0.0.1). These controls appear in the top-right navigation bar.
 
-1. **DB Up & DB Down**: Control the lifecycle of the containerized Weaviate and Neo4j instances directly from the UI via internal `docker-compose` orchestration.
-2. **Purge DB**: A destructive action that completely deletes the Weaviate class and executes `MATCH (n) DETACH DELETE n` in Neo4j, wiping all ingested data instantly.
-3. **Kill Switch**: An emergency abort mechanism. It issues a `docker-compose down` command and then forces a hard exit of the Flask server (`os._exit(0)`). This is designed to immediately halt runaway CrewAI inference loops or massive ingestion tasks.
+1. **DB Up & DB Down**: Control the lifecycle of the **Neo4j** container directly from the UI via internal `docker compose` orchestration. ChromaDB is embedded and requires no lifecycle management.
+2. **Purge DB**: A destructive action that deletes the ChromaDB collection and executes `MATCH (n) DETACH DELETE n` in Neo4j, wiping all ingested data instantly.
+3. **Kill Switch**: An emergency abort mechanism. Issues `docker compose down` and forces a hard exit of the Flask server (`os._exit(0)`). Designed to halt runaway CrewAI inference loops.
 
 ---
 
@@ -424,18 +468,17 @@ The application provides a suite of powerful administrative capabilities accessi
 healthexpert/
 ├── app.py                    Flask application (port 5050)
 ├── healthexpert.py           Standalone CLI
-├── config.py                 Central configuration (both endpoints)
-├── docker-compose.yml        Neo4j local instance
+├── config.py                 Central configuration (both endpoints + ChromaDB path)
+├── docker-compose.yml        Neo4j local instance (ChromaDB needs no container)
 ├── requirements.txt          Python dependencies
 │
 ├── agents/
 │   ├── gen_llm.py            ★ LLM Generation Server (port 8002)
-│   │                             tensorrt_llm · nvidia/Qwen3-8B-FP8
-│   │                             POST /v1/completions
+│   │                             transformers · Qwen/Qwen3-8B · 4-bit NF4
+│   │                             POST /v1/completions · POST /v1/kv_cache
 │   ├── embed_llm.py          ★ Embedding Server (port 8003)
 │   │                             FlagEmbedding BGEM3 · BAAI/bge-m3
-│   │                             POST /v1/embeddings
-│   │                             POST /v1/embeddings/multi
+│   │                             POST /v1/embeddings · POST /v1/embeddings/multi
 │   ├── llm.py                LangChain wrapper → port 8002
 │   ├── tools.py              CrewAI @tool functions
 │   └── crew.py               Crew assembly & execution
@@ -444,7 +487,7 @@ healthexpert/
 │   ├── document_loader.py    Multi-format document parser
 │   ├── chunker.py            Text splitting
 │   ├── embedder.py           HTTP client → port 8003
-│   ├── vector_store.py       Weaviate wrapper
+│   ├── vector_store.py       ★ ChromaDB wrapper + DB25 hybrid search
 │   └── graph_store.py        Neo4j wrapper
 │
 ├── templates/
@@ -456,5 +499,6 @@ healthexpert/
 │
 ├── uploads/                  Temporary file storage
 └── data/
-    └── weaviate_data/            Weaviate persistent store
+    ├── security.key          Fernet encryption key
+    └── chroma_db/            ★ ChromaDB persistent vector store
 ```

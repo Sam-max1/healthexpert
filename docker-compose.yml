@@ -1,20 +1,4 @@
 services:
-  weaviate:
-    image: cr.weaviate.io/semitechnologies/weaviate:1.27.0
-    container_name: healthexpert-weaviate
-    ports:
-      - "8080:8080"
-      - "50051:50051"
-    environment:
-      QUERY_DEFAULTS_LIMIT: 25
-      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
-      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
-      DEFAULT_VECTORIZER_MODULE: 'none'
-      CLUSTER_HOSTNAME: 'node1'
-    volumes:
-      - weaviate_data:/var/lib/weaviate
-    restart: unless-stopped
-
   neo4j:
     image: neo4j:5.18-community
     container_name: healthexpert-neo4j
@@ -43,4 +27,3 @@ volumes:
   neo4j_data:
   neo4j_logs:
   neo4j_import:
-  weaviate_data:
