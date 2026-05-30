@@ -28,6 +28,7 @@ def embed_texts(texts: list[str]) -> list[list[float]]:
             config.EMBED_EMBEDDINGS_URL,
             json    = {"input": texts},
             timeout = config.EMBEDDING_TIMEOUT,
+            verify  = False,
         )
         resp.raise_for_status()
         data = resp.json()
@@ -71,6 +72,7 @@ def embed_texts_multi(
             f"{config.EMBED_BASE_URL}/v1/embeddings/multi",
             json    = payload,
             timeout = config.EMBEDDING_TIMEOUT,
+            verify  = False,
         )
         resp.raise_for_status()
         return resp.json()

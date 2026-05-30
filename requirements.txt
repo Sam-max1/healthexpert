@@ -17,14 +17,19 @@ FlagEmbedding>=1.2.0
 
 # LLM Runtime
 torch>=2.6.0
-transformers>=4.57.0
+transformers @ git+https://github.com/huggingface/transformers.git
 accelerate>=0.34.0
 bitsandbytes>=0.43.0
 langchain-text-splitters>=0.3.0
 pydantic>=2.0.0
 
-# Vector Database
-weaviate-client>=4.5.4
+# Vector Database (ChromaDB — embedded, no server required)
+chromadb>=0.5.0
+
+# Hybrid Search (DB25: Dense + BM25 via Reciprocal Rank Fusion)
+rank-bm25>=0.2.2
+
+# Encryption
 cryptography>=41.0.0
 
 # Graph Database

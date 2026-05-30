@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import os
+os.environ["PYTHONWARNINGS"] = "ignore"
 import logging
 
 import numpy as np
@@ -23,9 +24,11 @@ from FlagEmbedding import BGEM3FlagModel
 # ── Logging ───────────────────────────────────────────────────────────────────
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s [embed_llm] %(levelname)s %(message)s",
+    format="%(asctime)s [%(name)s] %(levelname)s %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 log = logging.getLogger("embed_llm")
+logging.getLogger("werkzeug").setLevel(logging.ERROR)
 
 
 # ── JSON serialisation helper ─────────────────────────────────────────────────
@@ -242,6 +245,18 @@ def embeddings_multi():
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":
+    import signal
+    import sys
+    def sigint_handler(sig, frame):
+        log.info("SIGINT received, shutting down embed_llm gracefully...")
+        sys.exit(0)
+    signal.signal(signal.SIGINT, sigint_handler)
+    
     log.info("Starting embed_llm server on %s:%d", HOST, PORT)
     log.info("Model: %s  fp16=%s  batch=%d  max_len=%d", MODEL_NAME, USE_FP16, BATCH_SIZE, MAX_LENGTH)
-    app.run(host=HOST, port=PORT, debug=False, threaded=True)
+    cert_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cert.pem")
+    key_path = os.path.join(os.path.dirname(os.path.dirname(__file__)), "key.pem")
+    if os.path.exists(cert_path) and os.path.exists(key_path):
+        app.run(host=HOST, port=PORT, debug=False, threaded=True, ssl_context=(cert_path, key_path))
+    else:
+        app.run(host=HOST, port=PORT, debug=False, threaded=True)

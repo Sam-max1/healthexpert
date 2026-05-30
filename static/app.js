@@ -494,6 +494,15 @@ $('preset-embed').addEventListener('click', async () => {
 });
 
 // ── Query / Chat ───────────────────────────────────────────────────────────────
+document.querySelectorAll('.prompt-fill-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    queryInput.value = btn.innerText;
+    queryInput.style.height = 'auto';
+    queryInput.style.height = Math.min(queryInput.scrollHeight, 160) + 'px';
+    submitQuery();
+  });
+});
+
 queryInput.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) {
     e.preventDefault();
@@ -522,15 +531,29 @@ function addChatMsg(html, role) {
   return wrap;
 }
 
-function addThinkingMsg() {
+function addThinkingMsg(qId) {
   const wrap = document.createElement('div');
   wrap.className = 'chat-msg assistant';
   wrap.innerHTML = `
     <div class="chat-avatar">🏥</div>
     <div>
       <div class="chat-bubble">
-        <span class="thinking-dots"><span>•</span><span>•</span><span>•</span></span>
-        <span style="font-size:11px;color:var(--text-muted);margin-left:8px">Retrieving &amp; synthesizing…</span>
+        <div class="milestone-graph" id="milestone-graph-${qId}">
+          <div class="milestone" id="ms-inference-${qId}">
+            <div class="milestone-dot"></div>
+            <span>Inference <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+          </div>
+          <div class="milestone-line"></div>
+          <div class="milestone" id="ms-gatekeeping-${qId}">
+            <div class="milestone-dot"></div>
+            <span>Gatekeeping <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+          </div>
+          <div class="milestone-line"></div>
+          <div class="milestone" id="ms-analysis-${qId}">
+            <div class="milestone-dot"></div>
+            <span>Analysis <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+          </div>
+        </div>
       </div>
     </div>`;
   chatHistory.appendChild(wrap);
@@ -550,7 +573,8 @@ async function submitQuery() {
   diag.group('Query');
   diag.info('Query:', q);
   addChatMsg(q, 'user');
-  const thinkingEl = addThinkingMsg();
+  const qId = Date.now();
+  const thinkingEl = addThinkingMsg(qId);
 
   outputContainer.innerHTML = `<div class="output-placeholder">
     <div class="ph-icon">⚙️</div>
@@ -578,6 +602,32 @@ async function submitQuery() {
     const reader  = resp.body.getReader();
     const decoder = new TextDecoder();
     let   buffer  = '';
+    
+    // Timer logic
+    let currentTimerInterval = null;
+    let currentMsId = null;
+    let currentStartTime = 0;
+    
+    function startTimer(msId) {
+      if (currentTimerInterval) clearInterval(currentTimerInterval);
+      currentMsId = msId;
+      currentStartTime = Date.now();
+      currentTimerInterval = setInterval(() => {
+        const el = $(currentMsId);
+        if (!el) return;
+        const timerSpan = el.querySelector('.milestone-timer');
+        if (timerSpan) {
+          const s = (Date.now() - currentStartTime) / 1000;
+          timerSpan.innerText = `(${s.toFixed(1)}s)`;
+          timerSpan.dataset.time = s.toFixed(1);
+        }
+      }, 100);
+    }
+    
+    function stopTimer() {
+      if (currentTimerInterval) clearInterval(currentTimerInterval);
+      currentTimerInterval = null;
+    }
 
     while (true) {
       const { done, value } = await reader.read();
@@ -593,8 +643,51 @@ async function submitQuery() {
         catch(pe) { diag.warn('SSE parse error:', pe, line); continue; }
 
         if (payload.error)              throw new Error(payload.error);
-        if (payload.status === 'thinking') diag.info('SSE: thinking…');
+        if (payload.status) {
+          diag.info('SSE status:', payload.status);
+          const msInference = $(`ms-inference-${qId}`);
+          const msGatekeeping = $(`ms-gatekeeping-${qId}`);
+          const msAnalysis = $(`ms-analysis-${qId}`);
+          
+          if (!msInference || !msGatekeeping || !msAnalysis) continue;
+
+          // Clear current executing dots
+          [`ms-inference-${qId}`, `ms-gatekeeping-${qId}`, `ms-analysis-${qId}`].forEach(id => {
+             const el = $(id);
+             if (el) {
+                 const dot = el.querySelector('.milestone-dot');
+                 if (dot.className.includes('executing')) {
+                     dot.className = 'milestone-dot complete';
+                 }
+             }
+          });
+
+          if (payload.status === 'inference') {
+            msInference.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-inference-${qId}`);
+          } else if (payload.status === 'gatekeeping') {
+            msGatekeeping.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-gatekeeping-${qId}`);
+          } else if (payload.status === 'analysis') {
+            msAnalysis.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-analysis-${qId}`);
+          }
+        }
         if (payload.chunk) {
+          if (currentMsId) {
+            const el = $(currentMsId);
+            if (el) {
+              const dot = el.querySelector('.milestone-dot');
+              if (dot && dot.className.includes('executing')) {
+                if (currentMsId.includes('gatekeeping')) {
+                  dot.className = 'milestone-dot failed';
+                } else {
+                  dot.className = 'milestone-dot complete';
+                }
+                stopTimer();
+              }
+            }
+          }
           fullText += payload.chunk;
           chunkCount++;
           renderOutput(fullText);
@@ -614,7 +707,9 @@ async function submitQuery() {
     }
 
     diag.info(`Query complete — ${chunkCount} SSE chunks, ${fullText.length} chars`);
-    thinkingEl.remove();
+    stopTimer();
+    // Do not remove thinkingEl to preserve the graph
+    // thinkingEl.remove();
     addChatMsg('Answer generated — see the Output panel →', 'assistant');
     extractAndShowCitations(fullText);
     copyBtn.style.display = 'block';
@@ -623,7 +718,13 @@ async function submitQuery() {
 
   } catch(err) {
     diag.error('Query error:', err);
-    thinkingEl.remove();
+    stopTimer();
+    // Mark active dot as failed
+    if (currentMsId) {
+      const el = $(currentMsId);
+      if (el) el.querySelector('.milestone-dot').className = 'milestone-dot failed';
+    }
+    // thinkingEl.remove();
     addChatMsg(`❌ ${escHtml(err.message)}`, 'assistant');
     outputContainer.innerHTML = `<div class="output-placeholder" style="color:var(--red)">
       <div class="ph-icon">⚠️</div><div>${escHtml(err.message)}</div>

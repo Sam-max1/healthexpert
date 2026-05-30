@@ -125,7 +125,7 @@
     </div>
     <div id="query-footer">
       <!-- Default prompt test buttons -->
-      <div id="prompt-presets">
+      <div id="prompt-presets" style="margin-bottom: 8px; flex-wrap: wrap;">
         <button class="preset-btn" id="preset-gen"
                 title="Send a test prompt to the Gen LLM server (port 8002)">
           🧠 Test Gen LLM
@@ -134,6 +134,11 @@
                 title="Send a test sentence to the Embed LLM server (port 8003)">
           🔢 Test Embed LLM
         </button>
+      </div>
+      <div id="query-presets" style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
+        <button class="preset-btn prompt-fill-btn">What is Base Insurance Policy?</button>
+        <button class="preset-btn prompt-fill-btn">What is Super Top up Insurance Policy?</button>
+        <button class="preset-btn prompt-fill-btn">What is eligibility for insurance Policy?</button>
       </div>
       <form id="query-form" onsubmit="return false">
         <textarea

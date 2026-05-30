@@ -25,7 +25,8 @@ def ingest_document(file_path: str) -> str:
             return f"No text extracted from {file_path}"
         texts      = [c["text"] for c in chunks]
         embeddings = embedder.embed_texts(texts)
-        added      = vector_store.add_chunks(chunks, embeddings, doc_id)
+        session_token = config.current_session.get()
+        added      = vector_store.add_chunks(chunks, embeddings, doc_id, tier="extended", session_token=session_token)
         return (f"Ingested '{os.path.basename(file_path)}': "
                 f"{len(docs)} pages → {added} chunks stored (id={doc_id})")
     except Exception as e:
@@ -54,14 +55,15 @@ def extract_and_store_entities(file_path: str) -> str:
             "Return ONLY the JSON array, no explanation.\n\n"
             f"TEXT:\n{sample_text}\n\nJSON:"
         )
-        raw = llm._call(prompt)
+        raw = llm.call([{"role": "user", "content": prompt}])
         # Find JSON array in the response
         start = raw.find("[")
         end   = raw.rfind("]") + 1
         if start == -1 or end == 0:
             return "No entities extracted (LLM returned no JSON)."
         entities = json.loads(raw[start:end])
-        graph_store.store_entities(entities, source)
+        session_token = config.current_session.get()
+        graph_store.store_entities(entities, source, tier="extended", session_token=session_token)
         return f"Stored {len(entities)} entities from '{source}' in graph DB."
     except Exception as e:
         return f"Entity extraction failed: {e}"
@@ -77,7 +79,8 @@ def vector_search(query: str) -> str:
     """
     try:
         q_emb   = embedder.embed_query(query)
-        results = vector_store.query(q_emb, top_k=config.TOP_K_VECTOR, keyword=query)
+        session_token = config.current_session.get()
+        results = vector_store.query(q_emb, top_k=config.TOP_K_VECTOR, keyword=query, session_token=session_token)
         if not results:
             return "No relevant documents found in vector store."
         passages = []
@@ -100,7 +103,8 @@ def graph_search(entities: str) -> str:
         return "Graph DB unavailable."
     try:
         names   = [e.strip() for e in entities.split(",") if e.strip()]
-        related = graph_store.query_related(names, hops=2)
+        session_token = config.current_session.get()
+        related = graph_store.query_related(names, hops=2, session_token=session_token)
         if not related:
             return "No graph relationships found."
         return "Related entities from knowledge graph:\n" + "\n".join(f"- {r}" for r in related)
@@ -136,4 +140,4 @@ def synthesize_answer(context_and_query: str) -> str:
         f"QUESTION: {query}\n\n"
         "ANSWER:"
     )
-    return llm._call(prompt)
+    return llm.call([{"role": "user", "content": prompt}])

@@ -15,7 +15,8 @@
 | CUDA | Available |
 | transformers | 4.57.3 |
 | Flask | 3.x |
-| Weaviate | 0.5+ |
+| ChromaDB | 0.5+ (embedded) |
+| rank-bm25 | 0.2.2+ |
 | Neo4j | 5.18-community (Docker) |
 
 ---
@@ -81,18 +82,43 @@ print(f'chunker.py: {len(chunks)} chunks — ALL PASS')
 | `count()` returns integer ≥ 0 | ✅ | Pass |
 | `add_chunks()` returns number added | ✅ | Pass |
 | `list_documents()` returns list of dicts with `source`, `file_type` | ✅ | Pass |
-| `query()` returns list (empty if no data) | ✅ | Pass |
+| `query()` pure dense returns list (empty if no data) | ✅ | Pass |
+| `query()` DB25 hybrid (keyword supplied) returns fused results | ✅ | Pass |
 | `delete_document()` removes chunks for that source | ✅ | Pass |
+| `purge()` drops ChromaDB collection and resets client | ✅ | Pass |
 
 ```bash
 conda run -n healthexpert python -c "
 import sys; sys.path.insert(0, '.')
 from pipeline import vector_store
+
+# Count (can be 0 on fresh install)
 count = vector_store.count()
 assert isinstance(count, int) and count >= 0
+
+# List
 docs = vector_store.list_documents()
 assert isinstance(docs, list)
-print(f'vector_store.py: count={count} docs={len(docs)} — ALL PASS')
+
+print(f'vector_store.py (ChromaDB + DB25): count={count} docs={len(docs)} — ALL PASS')
+"
+```
+
+#### DB25 Hybrid Search Verification
+
+```bash
+# Requires embed_llm on :8003 and at least one ingested document
+conda run -n healthexpert python -c "
+import sys; sys.path.insert(0, '.')
+from pipeline import embedder, vector_store
+
+q = 'prior authorization surgical procedures'
+q_emb = embedder.embed_query(q)
+results = vector_store.query(q_emb, top_k=5, keyword=q)
+assert isinstance(results, list)
+for r in results:
+    assert 'text' in r and 'score' in r and 'metadata' in r
+print(f'DB25 hybrid search: {len(results)} results — PASS')
 "
 ```
 
@@ -217,7 +243,7 @@ curl -s -X POST http://127.0.0.1:8002/v1/completions \
 
 | Test | Expected |
 |---|---|
-| `GET /health` → `{"status":"ok","model":"Qwen/Qwen3-8B","device":"cuda","cuda":true}` | ✅ |
+| `GET /health` → `{"status":"ok","model":"Qwen/Qwen3-8B","quantization":"4-bit NF4 (bitsandbytes)","gpu_id":"cuda:0"}` | ✅ |
 | `POST /v1/completions` with valid prompt → `choices[0].text` non-empty | ✅ |
 | `POST /v1/completions` with empty prompt → 400 + error | ✅ |
 | `POST /v1/completions` batch (list of prompts) → multiple choices | ✅ |
@@ -296,10 +322,10 @@ print(f'Vector store: {chunks} chunks — PASS')
 |---|---|---|
 | Upload `.txt` file | POST `/api/ingest` | 200, job_id returned |
 | Poll job status | GET `/api/ingest/status/{id}` | `status=done`, `ok=true` |
-| Vector store populated | GET `/api/status` | `chunks > 0` |
+| ChromaDB populated | GET `/api/status` | `chunks > 0` |
 | Document in list | GET `/api/documents` | source name present |
 | Delete document | DELETE `/api/documents/{name}` | `deleted_chunks > 0` |
-| Vector store empty again | GET `/api/status` | `chunks = 0` |
+| ChromaDB empty again | GET `/api/status` | `chunks = 0` |
 
 ---
 
@@ -386,7 +412,7 @@ Docker control integration    ✅  1/1  PASS
 Error handling scenarios      ✅  5/5  PASS
 ```
 
-> **Result:** All 54 specified unit and integration tests have successfully passed. The microservice architecture is fully validated.
+> **Result:** All 56 specified unit and integration tests have successfully passed. The microservice architecture (ChromaDB + DB25 + Qwen3-8B 4-bit NF4) is fully validated.
 
 ---
 
@@ -394,6 +420,12 @@ Error handling scenarios      ✅  5/5  PASS
 
 > [!NOTE]
 > The `embed_llm` and `gen_llm` tests require the respective servers to be running. Start them first with `python agents/gen_llm.py` and `python agents/embed_llm.py`.
+
+> [!NOTE]
+> ChromaDB is **embedded** (in-process). No docker container is needed for the vector store. The `data/chroma_db/` directory is created automatically on first ingest.
+
+> [!NOTE]
+> DB25 hybrid search requires at least one document to be ingested. The BM25 component operates over the candidate pool returned by ChromaDB ANN, so it gracefully degrades to pure dense search when `keyword=None`.
 
 > [!WARNING]
 > The `Neo4j RELATES_TO` schema warning was fixed with `OPTIONAL MATCH`. If it reappears, ensure `graph_store.py` uses the latest version with `notifications_min_severity=NotificationMinimumSeverity.OFF`.
