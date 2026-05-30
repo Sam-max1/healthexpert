@@ -16,7 +16,9 @@ current_session = contextvars.ContextVar("current_session", default="admin")
 # ── LLM generation server (gen_llm.py — port 8002) ──────────────────────────
 LLM_BASE_URL          = os.getenv("LLM_BASE_URL",   "https://127.0.0.1:8002")
 LLM_COMPLETIONS_URL   = f"{LLM_BASE_URL}/v1/completions"
-LLM_MODEL_ID          = os.getenv("LLM_MODEL_ID",   "Qwen/Qwen3-8B")
+_hf_space = bool(os.getenv("SPACE_ID"))
+_default_model = "Qwen/Qwen2.5-1.5B-Instruct" if _hf_space else "Qwen/Qwen3-8B"
+LLM_MODEL_ID          = os.getenv("LLM_MODEL_ID",   _default_model)
 LLM_MODEL_FILENAME    = os.getenv("LLM_MODEL_FILENAME", "") # Ignored for transformers
 # 2048 output tokens — sufficient for detailed Markdown RAG answers without truncation.
 LLM_MAX_TOKENS        = int(os.getenv("LLM_MAX_TOKENS",   "2048"))
