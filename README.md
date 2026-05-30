@@ -23,7 +23,7 @@
 **HealthExpert** is an enterprise-grade AI document analysis platform combining:
 
 - **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
-- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + DB25) + Graph DB (Neo4j) for comprehensive retrieval
+- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + BM25) + Graph DB (Neo4j) for comprehensive retrieval
 - **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
 - **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
 - **🌐 Web UI**: Real-time streaming responses with source citations
