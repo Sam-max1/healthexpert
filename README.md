@@ -1,3 +1,13 @@
+---
+title: HealthExpert
+emoji: 🏥
+colorFrom: blue
+colorTo: green
+sdk: docker
+app_port: 7860
+pinned: false
+---
+
 # HealthExpert 🏥
 
 ![HealthExpert Admin UI Dashboard](static/screenshot.png)<div align="center">
