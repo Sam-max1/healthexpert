@@ -36,6 +36,42 @@ MODEL_NAME = os.getenv("GEN_MODEL_ID", "Qwen/Qwen3-8B")
 HOST       = os.getenv("GEN_HOST",    "127.0.0.1")
 PORT       = int(os.getenv("GEN_PORT", "8002"))
 
+# ── GPU Detection ─────────────────────────────────────────────────────────────
+# Probe CUDA availability and select the target device before model load.
+# If GPU is found, inference is forced onto it.  Falls back to CPU with a
+# warning so the server still starts (slowly) when no GPU is present.
+
+if torch.cuda.is_available():
+    _cuda_count = torch.cuda.device_count()
+    _cuda_idx   = int(os.getenv("GEN_CUDA_DEVICE", "0"))   # override via env if needed
+    _cuda_idx   = min(_cuda_idx, _cuda_count - 1)           # clamp to valid range
+    _device     = torch.device(f"cuda:{_cuda_idx}")
+    _gpu_id     = f"cuda:{_cuda_idx}"
+    _device_map = {"":  _cuda_idx}                          # force ALL layers onto this GPU
+
+    _gpu_props  = torch.cuda.get_device_properties(_cuda_idx)
+    _vram_total = _gpu_props.total_memory / 1024 ** 3       # bytes → GiB
+    _vram_free  = (torch.cuda.mem_get_info(_cuda_idx)[0]) / 1024 ** 3
+
+    log.info("━" * 60)
+    log.info("GPU DETECTED")
+    log.info("  Device index : %d of %d", _cuda_idx, _cuda_count)
+    log.info("  Device name  : %s", _gpu_props.name)
+    log.info("  CUDA version : %s", torch.version.cuda)
+    log.info("  VRAM total   : %.2f GiB", _vram_total)
+    log.info("  VRAM free    : %.2f GiB", _vram_free)
+    log.info("  Compute cap  : %d.%d", _gpu_props.major, _gpu_props.minor)
+    log.info("  Inference    : FORCED on %s", _gpu_id)
+    log.info("━" * 60)
+else:
+    _device     = torch.device("cpu")
+    _gpu_id     = "cpu"
+    _device_map = "cpu"
+    log.warning("━" * 60)
+    log.warning("NO GPU DETECTED — inference will run on CPU (slow).")
+    log.warning("Ensure CUDA drivers and PyTorch CUDA build are installed.")
+    log.warning("━" * 60)
+
 # ── 4-bit NF4 quantization (bitsandbytes) ────────────────────────────────────
 bnb_config = BitsAndBytesConfig(
     load_in_4bit=True,
@@ -45,14 +81,13 @@ bnb_config = BitsAndBytesConfig(
 )
 
 # ── Model Initialization ───────────────────────────────────────────────────────
-log.info("Loading model %s with 4-bit NF4 quantization...", MODEL_NAME)
+log.info("Loading model %s with 4-bit NF4 quantization → %s ...", MODEL_NAME, _gpu_id)
 try:
-    # device_map="auto" distributes layers across available GPU(s) / CPU
     tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_NAME,
         quantization_config=bnb_config,
-        device_map="auto",
+        device_map=_device_map,     # explicitly mapped to detected GPU (or CPU)
         trust_remote_code=True,
     )
     model.eval()
@@ -60,18 +95,11 @@ try:
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
 
-    # Determine active GPU for health reporting
-    _gpu_id = "cpu"
-    if torch.cuda.is_available():
-        _gpu_id = f"cuda:{torch.cuda.current_device()}"
-        vram_gb = torch.cuda.get_device_properties(torch.cuda.current_device()).total_memory / 1e9
-        log.info("GPU: %s  |  VRAM: %.1f GB", _gpu_id, vram_gb)
-
 except Exception as e:
     log.error("Failed to load model: %s", e)
     raise
 
-log.info("Model ready! (%s, 4-bit NF4)", MODEL_NAME)
+log.info("Model ready! (%s, 4-bit NF4, device=%s)", MODEL_NAME, _gpu_id)
 
 # ── Flask app & KV Cache ──────────────────────────────────────────────────────
 precompiled_kv_cache = None
