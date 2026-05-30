@@ -3,7 +3,8 @@ FROM python:3.11-slim
 # Install system dependencies (tesseract-ocr for document scanning, libgl1 for image processing)
 RUN apt-get update && apt-get install -y \
     tesseract-ocr \
-    libgl1-mesa-glx \
+    libgl1 \
+    libglib2.0-0 \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
