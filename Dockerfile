@@ -1,40 +1,72 @@
-FROM continuumio/miniconda3:latest
+# Dockerfile.hf — HuggingFace Spaces optimised image
+#
+# Target environment:
+#   2 vCPU  |  12 GB RAM  |  16 GB disk  |  No GPU
+#   Python 3.12.12  |  PyTorch CPU-only
+#
+# Local test:
+#   docker build -f Dockerfile.hf -t healthexpert-hf .
+#   docker run -p 7860:7860 --memory="12g" --cpus="2" healthexpert-hf
+#
+# Push to HuggingFace:
+#   Build is triggered automatically when this Dockerfile is in the Space repo root
+#   (rename to Dockerfile before pushing to HF).
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
+FROM python:3.12.12-slim
+
+# ── System dependencies ────────────────────────────────────────────────────────
+# Minimal set: OCR engine + OpenCV headless libs only.
+# No build-essential, no git (not needed at runtime).
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     libgl1 \
     libglib2.0-0 \
-    git \
-    build-essential \
+    libgomp1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# METHOD 2: Create the Conda environment and permanently update the PATH
-RUN conda create -n docai python=3.12.12 -y
-ENV PATH="/opt/conda/envs/docai/bin:$PATH"
+# ── Python environment ─────────────────────────────────────────────────────────
+# CRITICAL: Install CPU-only PyTorch FIRST to prevent pip pulling the 2.5 GB CUDA build.
+# CPU wheel is ~260 MB vs 2.5 GB for CUDA — essential for 16 GB disk constraint.
+RUN pip install --no-cache-dir \
+    torch==2.5.1+cpu \
+    torchvision==0.20.1+cpu \
+    torchaudio==2.5.1+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
 
-# CRITICAL FIX: Install CPU-only PyTorch first to prevent downloading 2.5GB of useless CUDA drivers
-RUN pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+# ── Application dependencies ───────────────────────────────────────────────────
+COPY requirements_hf.txt .
+RUN pip install --no-cache-dir -r requirements_hf.txt
 
-# Copy requirements and install
-COPY requirements.txt .
-
-# Remove the 'torch' line from requirements dynamically so we don't overwrite our CPU version[cite: 3], and remove GPU-only bitsandbytes
-RUN sed -i '/torch/d' requirements.txt && \
-    sed -i '/bitsandbytes/d' requirements.txt && \
-    pip install --no-cache-dir -r requirements.txt
-
-# Copy application codebase
+# ── Application codebase ───────────────────────────────────────────────────────
 COPY . .
 
-# Ensure the start script is executable [cite: 4]
+# Remove GPU-mode files to keep image clean (optional, saves ~1 MB)
+RUN rm -f requirements_gpu.txt Dockerfile_bak
+
 RUN chmod +x start.sh
 
-# Expose default HuggingFace Spaces port
+# ── Environment configuration ─────────────────────────────────────────────────
+# HF_MODE=1 activates low-resource path in config.py, gen_llm.py, embed_llm.py
+ENV HF_MODE=1
+ENV ADMIN_MODE=0
 ENV PORT=7860
+
+# HuggingFace model cache — use /app/models to keep within Space storage
+ENV HF_HOME=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV SENTENCE_TRANSFORMERS_HOME=/app/models
+
+# Suppress noisy PyTorch/tokenizer warnings in logs
+ENV PYTHONWARNINGS=ignore
+ENV TOKENIZERS_PARALLELISM=false
+
+# ── Port ──────────────────────────────────────────────────────────────────────
 EXPOSE 7860
 
-# Run all microservices together
-ENTRYPOINT ["bash", "start.sh"]
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+# -hf activates low-resource mode; ADMIN_MODE env var controls admin controls.
+# To disable admin controls for public endpoint, set ENV ADMIN_MODE=0 above
+# or pass -noadmin here.
+ENTRYPOINT ["bash", "start.sh", "-hf", "-noadmin"]
