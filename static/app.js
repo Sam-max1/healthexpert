@@ -86,10 +86,13 @@ async function refreshStatus() {
     const embedOk = d.embed_llm?.online;
     
     state.isAdmin = !!d.is_admin;
+    // Admin controls: only show if server reports admin mode enabled AND caller is admin
+    const adminMode = (window.APP_CONFIG && window.APP_CONFIG.adminMode !== false) ? true : false;
+    const showAdmin = state.isAdmin && adminMode;
     const adminBadge = $('admin-badge');
-    if (adminBadge) adminBadge.style.display = state.isAdmin ? 'inline' : 'none';
+    if (adminBadge) adminBadge.style.display = showAdmin ? 'inline' : 'none';
     const adminControls = $('admin-controls');
-    if (adminControls) adminControls.style.display = state.isAdmin ? 'flex' : 'none';
+    if (adminControls) adminControls.style.display = showAdmin ? 'flex' : 'none';
 
     setPill('status-vector', vecOk,   `Vector · ${d.vector_db?.chunks ?? '?'} chunks`);
     setPill('status-graph',  graphOk, graphOk ? `Graph · ${d.graph_db.nodes} nodes, ${d.graph_db.relationships} edges` : 'Graph · offline');
@@ -174,11 +177,72 @@ async function adminKill() {
   }
 }
 
-$('db-up-btn').addEventListener('click',      () => dockerAction('up'));
-$('db-down-btn').addEventListener('click',    () => dockerAction('down'));
-$('db-purge-btn').addEventListener('click',   adminPurge);
-$('app-kill-btn').addEventListener('click',   adminKill);
-$('docker-modal-close').addEventListener('click', () => { dockerModal.style.display = 'none'; });
+if ($('db-up-btn'))    $('db-up-btn').addEventListener('click',      () => dockerAction('up'));
+if ($('db-down-btn'))  $('db-down-btn').addEventListener('click',    () => dockerAction('down'));
+if ($('db-purge-btn')) $('db-purge-btn').addEventListener('click',   adminPurge);
+if ($('app-kill-btn')) $('app-kill-btn').addEventListener('click',   adminKill);
+if ($('docker-modal-close')) $('docker-modal-close').addEventListener('click', () => { dockerModal.style.display = 'none'; });
+
+// ── Resource Monitor Banner ────────────────────────────────────────────────────
+function _resBarClass(pct) {
+  if (pct >= 90) return 'crit';
+  if (pct >= 70) return 'warn';
+  return '';
+}
+
+async function pollSysInfo() {
+  try {
+    const r = await fetch('/api/sysinfo');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (d.error) return;
+
+    // CPU
+    const cpuPct   = d.cpu_pct ?? 0;
+    const cpuCls   = _resBarClass(cpuPct);
+    const cpuBar   = $('res-cpu-bar');
+    const cpuPctEl = $('res-cpu-pct');
+    const cpuLabel = $('res-cpu-label');
+    if (cpuBar)   { cpuBar.style.width = cpuPct + '%'; cpuBar.className = 'res-bar ' + cpuCls; }
+    if (cpuPctEl) { cpuPctEl.textContent = cpuPct.toFixed(0) + '%'; cpuPctEl.className = 'res-pct ' + cpuCls; }
+    if (cpuLabel) {
+      // Shorten: show first word of brand + core count
+      const brand = (d.cpu_brand || 'CPU').split(' ').slice(0,2).join(' ');
+      const mhz   = d.cpu_mhz ? ` @ ${(d.cpu_mhz/1000).toFixed(1)}GHz` : '';
+      cpuLabel.textContent = `${brand} ×${d.cpu_cores}${mhz}`;
+    }
+
+    // RAM
+    const ramPct   = d.ram_pct ?? 0;
+    const ramCls   = _resBarClass(ramPct);
+    const ramBar   = $('res-ram-bar');
+    const ramPctEl = $('res-ram-pct');
+    const ramLabel = $('res-ram-label');
+    if (ramBar)   { ramBar.style.width = ramPct + '%'; ramBar.className = 'res-bar ' + ramCls; }
+    if (ramPctEl) { ramPctEl.textContent = ramPct.toFixed(0) + '%'; ramPctEl.className = 'res-pct ' + ramCls; }
+    if (ramLabel) ramLabel.textContent = `RAM: ${d.ram_used_gb} / ${d.ram_total_gb} GB`;
+
+    // Disk
+    const diskPct   = d.disk_pct ?? 0;
+    const diskCls   = _resBarClass(diskPct);
+    const diskBar   = $('res-disk-bar');
+    const diskPctEl = $('res-disk-pct');
+    const diskLabel = $('res-disk-label');
+    if (diskBar)   { diskBar.style.width = diskPct + '%'; diskBar.className = 'res-bar ' + diskCls; }
+    if (diskPctEl) { diskPctEl.textContent = diskPct.toFixed(0) + '%'; diskPctEl.className = 'res-pct ' + diskCls; }
+    if (diskLabel) diskLabel.textContent = `Disk: ${d.disk_free_gb} / ${d.disk_total_gb} GB free`;
+
+    // Mode badge
+    const badge = $('res-mode-badge');
+    if (badge) {
+      const isHf = d.hf_mode || (window.APP_CONFIG && window.APP_CONFIG.hfMode);
+      badge.textContent  = isHf ? '⚡ HF / CPU Mode' : '🖥 GPU Mode';
+      badge.className    = 'res-mode-badge ' + (isHf ? 'hf-mode' : 'gpu-mode');
+    }
+  } catch(err) {
+    diag.warn('pollSysInfo failed:', err);
+  }
+}
 
 // ── Document list ──────────────────────────────────────────────────────────────
 const TYPE_ICONS = {
@@ -275,12 +339,58 @@ if (tierCancel) {
         pendingFiles = [];
     });
 }
+let expectedCaptchaAnswer = 0;
+const captchaModal = $('captcha-modal');
+const captchaQuestion = $('captcha-question');
+const captchaInput = $('captcha-input');
+const captchaError = $('captcha-error');
+const captchaCancel = $('captcha-modal-cancel');
+const captchaVerify = $('captcha-modal-verify');
+
+function generateCaptcha() {
+    const a = Math.floor(Math.random() * 10) + 1;
+    const b = Math.floor(Math.random() * 10) + 1;
+    expectedCaptchaAnswer = a + b;
+    if (captchaQuestion) captchaQuestion.textContent = `${a} + ${b} =`;
+    if (captchaInput) captchaInput.value = '';
+    if (captchaError) captchaError.style.display = 'none';
+}
+
 if (tierConfirm) {
     tierConfirm.addEventListener('click', () => {
         tierModal.style.display = 'none';
-        const selectedTier = document.querySelector('input[name="kb_tier"]:checked').value;
-        ingestFiles(pendingFiles, selectedTier);
+        generateCaptcha();
+        if (captchaModal) captchaModal.style.display = 'flex';
+        if (captchaInput) captchaInput.focus();
     });
+}
+
+if (captchaCancel) {
+    captchaCancel.addEventListener('click', () => {
+        captchaModal.style.display = 'none';
+        pendingFiles = [];
+    });
+}
+
+if (captchaVerify) {
+    const verifyAndProceed = () => {
+        const userAns = parseInt(captchaInput.value, 10);
+        if (userAns === expectedCaptchaAnswer) {
+            captchaModal.style.display = 'none';
+            const selectedTier = document.querySelector('input[name="kb_tier"]:checked').value;
+            ingestFiles(pendingFiles, selectedTier);
+        } else {
+            captchaError.style.display = 'block';
+            captchaInput.value = '';
+            captchaInput.focus();
+        }
+    };
+    captchaVerify.addEventListener('click', verifyAndProceed);
+    if (captchaInput) {
+        captchaInput.addEventListener('keydown', e => {
+            if (e.key === 'Enter') verifyAndProceed();
+        });
+    }
 }
 
 dropZone.addEventListener('click', () => fileInput.click());
@@ -786,6 +896,8 @@ function escHtml(s) {
   diag.info('App initialising…');
   await refreshStatus();
   await loadDocuments();
+  await pollSysInfo();          // Initial resource banner population
   setInterval(refreshStatus, 30_000);
+  setInterval(pollSysInfo,   10_000);  // Update resource banner every 10 s
   diag.info('App ready.');
 })();

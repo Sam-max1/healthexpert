@@ -2,6 +2,19 @@
 
 """Document AI Expert — Flask Application."""
 from __future__ import annotations
+import sys
+
+# ── CLI switch parsing (must happen BEFORE config import) ─────────────────────
+# -hf      → sets HF_MODE=1 (low-resource CPU mode)
+# -noadmin → sets ADMIN_MODE=0 (disables admin routes and UI controls)
+for _arg in sys.argv[1:]:
+    if _arg in ("-hf", "--hf"):
+        import os as _os
+        _os.environ["HF_MODE"] = "1"
+    elif _arg in ("-noadmin", "--noadmin"):
+        import os as _os
+        _os.environ["ADMIN_MODE"] = "0"
+
 import os
 os.environ["PYTHONWARNINGS"] = "ignore"
 import uuid, json, threading, subprocess, logging, warnings, signal, time
@@ -22,6 +35,8 @@ logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [app] %(levelname)s %(message)s")
 logging.getLogger("werkzeug").setLevel(logging.ERROR)
 logging.getLogger("numexpr").setLevel(logging.ERROR)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("filelock").setLevel(logging.WARNING)
 
 # Capture all Python warnings and route them to the py.warnings logger, then silence it
 logging.captureWarnings(True)
@@ -35,7 +50,7 @@ os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
 
 # In-memory job tracker for async ingestion
 _jobs: dict[str, dict] = {}
-
+_session_uploads: dict[str, int] = {}
 
 # RBAC Session Tracking
 _active_sessions: dict[str, float] = {}
@@ -45,7 +60,24 @@ def _allowed(filename: str) -> bool:
     return Path(filename).suffix.lower() in config.ALLOWED_EXTENSIONS
 
 def is_admin() -> bool:
+    """Return True if the request comes from an admin-privileged context.
+    
+    In HF mode with ADMIN_MODE=1: admin is granted to all localhost requests.
+    With ADMIN_MODE=0 (-noadmin): always False — no admin access regardless of IP.
+    """
+    if not config.ADMIN_MODE:
+        return False
+    if config.HF_MODE:
+        # In HF mode, admin is only valid from the loopback (e.g. start.sh itself)
+        return request.remote_addr in ("127.0.0.1", "::1")
     return request.remote_addr in ("127.0.0.1", "::1", "localhost")
+
+@app.before_request
+def block_external_apis():
+    """Hard block all external API (headless) access in public mode."""
+    if not config.ADMIN_MODE:
+        if request.path.startswith("/api/v1/"):
+            return jsonify({"error": "Headless API access is disabled in public mode."}), 403
 
 def get_session_token() -> str:
     """Return session token if the user is not an admin, else 'admin'."""
@@ -67,7 +99,7 @@ def trigger_kv_cache_update(session_token: str = "admin"):
         text = vector_store.get_all_text(session_token=token)
         log.info("Triggering KV cache update with %d chars...", len(text))
         try:
-            requests.post(f"{config.LLM_BASE_URL}/v1/kv_cache", json={"text": text}, timeout=120, verify=False)
+            requests.post(f"{config.LLM_BASE_URL}/v1/kv_cache", json={"text": text}, timeout=120)
             log.info("KV Cache updated successfully.")
         except Exception as e:
             log.error("Failed to update KV Cache: %s", e)
@@ -134,7 +166,7 @@ threading.Thread(target=_cleanup_agent, daemon=True).start()
 
 @app.route("/")
 def index():
-    return render_template("index.html")
+    return render_template("index.html", config=config)
 
 
 @app.route("/api/status")
@@ -148,7 +180,7 @@ def status():
     gen_ok, embed_ok = False, False
     gen_info = {}
     try:
-        r = req.get(f"{config.LLM_BASE_URL}/health", timeout=3, verify=False)
+        r = req.get(f"{config.LLM_BASE_URL}/health", timeout=3)
         gen_ok = r.status_code == 200
         if gen_ok:
             gen_info = r.json()
@@ -160,7 +192,7 @@ def status():
         log.warning("Gen LLM status check failed: %s", e)
         
     try:
-        r = req.get(f"{config.EMBED_BASE_URL}/health", timeout=3, verify=False)
+        r = req.get(f"{config.EMBED_BASE_URL}/health", timeout=3)
         embed_ok = r.status_code == 200
     except req.exceptions.ReadTimeout:
         embed_ok = True
@@ -175,15 +207,77 @@ def status():
             "online":   gen_ok,
             "model":    gen_info.get("model", config.LLM_MODEL_ID),
             "gpu_id":   gen_info.get("gpu_id", "cpu"),
-            "kv_cache_length": gen_info.get("kv_cache_length", 0)
+            "kv_cache_length": gen_info.get("kv_cache_length", 0),
         },
         "embed_llm":  {
             "endpoint": config.EMBED_EMBEDDINGS_URL,
             "model":    config.EMBEDDING_MODEL,
             "online":   embed_ok,
         },
-        "is_admin": is_admin(),
+        "is_admin":   is_admin(),
+        "hf_mode":    config.HF_MODE,
+        "admin_mode": config.ADMIN_MODE,
     })
+
+
+@app.route("/api/sysinfo")
+def sysinfo():
+    """System resource info for the UI resource banner.
+    Returns CPU model/count, load %, RAM used/total (GB), disk free/total (GB).
+    """
+    try:
+        import psutil
+        mem  = psutil.virtual_memory()
+        disk = psutil.disk_usage("/")
+        cpu_freq = psutil.cpu_freq()
+
+        # RAM in GB
+        ram_total_gb = round(mem.total      / 1024 ** 3, 1)
+        ram_used_gb  = round((mem.total - mem.available) / 1024 ** 3, 1)
+        ram_pct      = mem.percent
+
+        # Disk in GB
+        disk_total_gb = round(disk.total / 1024 ** 3, 1)
+        disk_free_gb  = round(disk.free  / 1024 ** 3, 1)
+        disk_pct      = round(disk.percent, 1)
+
+        # CPU
+        cpu_pct   = psutil.cpu_percent(interval=0.2)
+        cpu_count = psutil.cpu_count(logical=True)
+        cpu_phys  = psutil.cpu_count(logical=False) or cpu_count
+
+        # CPU brand (Linux: read /proc/cpuinfo)
+        cpu_brand = "CPU"
+        try:
+            with open("/proc/cpuinfo") as f:
+                for line in f:
+                    if "model name" in line:
+                        cpu_brand = line.split(":", 1)[1].strip()
+                        # Shorten common long strings
+                        cpu_brand = cpu_brand.replace("(R)", "").replace("(TM)", "").strip()
+                        break
+        except Exception:
+            pass
+
+        cpu_mhz = round(cpu_freq.current, 0) if cpu_freq else None
+
+        return jsonify({
+            "cpu_brand":    cpu_brand,
+            "cpu_cores":    cpu_count,
+            "cpu_phys":     cpu_phys,
+            "cpu_mhz":      cpu_mhz,
+            "cpu_pct":      cpu_pct,
+            "ram_total_gb": ram_total_gb,
+            "ram_used_gb":  ram_used_gb,
+            "ram_pct":      ram_pct,
+            "disk_total_gb": disk_total_gb,
+            "disk_free_gb": disk_free_gb,
+            "disk_pct":     disk_pct,
+            "hf_mode":      config.HF_MODE,
+        })
+    except Exception as exc:
+        log.warning("sysinfo failed: %s", exc)
+        return jsonify({"error": str(exc)}), 500
 
 
 @app.route("/api/documents")
@@ -198,6 +292,8 @@ def list_documents():
 @app.route("/api/docker/<action>", methods=["POST"])
 def docker_control(action: str):
     """Control Neo4j docker container. action: up | down | restart"""
+    if not config.ADMIN_MODE:
+        return jsonify({"error": "Admin mode is disabled on this deployment."}), 403
     if not is_admin():
         return jsonify({"error": "Only admins can control docker containers."}), 403
     if action not in ("up", "down", "restart"):
@@ -209,6 +305,8 @@ def docker_control(action: str):
 @app.route("/api/admin/purge", methods=["POST"])
 def admin_purge():
     """Wipe all databases clean."""
+    if not config.ADMIN_MODE:
+        return jsonify({"error": "Admin mode is disabled on this deployment."}), 403
     if not is_admin():
         return jsonify({"error": "Admin only"}), 403
     try:
@@ -226,6 +324,8 @@ def admin_purge():
 @app.route("/api/admin/kill", methods=["POST"])
 def admin_kill():
     """Abruptly stop Docker containers and terminate the Flask application."""
+    if not config.ADMIN_MODE:
+        return jsonify({"error": "Admin mode is disabled on this deployment."}), 403
     if not is_admin():
         return jsonify({"error": "Admin only"}), 403
         
@@ -234,7 +334,7 @@ def admin_kill():
     
     def _shutdown():
         import time
-        time.sleep(1) # Allow HTTP response to send
+        time.sleep(1)  # Allow HTTP response to send
         os._exit(0)
     threading.Thread(target=_shutdown, daemon=True).start()
     return jsonify({"ok": True, "msg": "Kill switch activated. Application terminating."})
@@ -263,6 +363,18 @@ def ingest():
     if not files or all(not f.filename for f in files):
         return jsonify({"error": "File list is empty or filenames are blank"}), 400
 
+    # ── Security Limits ──
+    if config.HF_MODE:
+        current_uploads = _session_uploads.get(token, 0)
+        if current_uploads + len(files) > 5:
+            return jsonify({"error": f"Session limit exceeded. You can only upload 5 files per session. (Current: {current_uploads})"}), 429
+            
+        current_chunks = vector_store.count()
+        if current_chunks >= 500:
+            return jsonify({"error": "Vector database is full (500 chunk limit reached). Please wait for an admin to purge."}), 429
+            
+        _session_uploads[token] = current_uploads + len(files)
+        
     job_id      = uuid.uuid4().hex[:8]
     saved_paths = []
     rejected    = []
@@ -334,6 +446,14 @@ def ingest():
 
                 # Step 4: store in vector DB
                 step_log.append(f"[{orig_name}] Storing in ChromaDB (tier: {tier}, session: {token})…")
+                if config.HF_MODE and vector_store.count() + len(chunks) > 500:
+                    allowed = 500 - vector_store.count()
+                    if allowed <= 0:
+                        raise ValueError("Vector database full (500 chunk limit).")
+                    chunks = chunks[:allowed]
+                    embeddings = embeddings[:allowed]
+                    step_log.append(f"[{orig_name}] WARNING: Truncated to {allowed} chunks due to global 500 chunk limit.")
+                    
                 doc_id  = uuid.uuid4().hex[:8]
                 added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
                 step_log.append(f"[{orig_name}] Stored {added} chunks in vector DB (doc_id={doc_id}).")
@@ -607,7 +727,6 @@ def probe_gen():
             json={"prompt": "Hello, reply with one sentence.", "max_tokens": 64,
                   "temperature": 0.7, "top_p": 0.9},
             timeout=30,
-            verify=False,
         )
         r.raise_for_status()
         data = r.json()
@@ -627,7 +746,6 @@ def probe_embed():
             config.EMBED_EMBEDDINGS_URL,
             json={"input": "Document test sentence."},
             timeout=30,
-            verify=False,
         )
         r.raise_for_status()
         data = r.json()
@@ -644,22 +762,33 @@ def probe_embed():
 
 
 if __name__ == "__main__":
-    print("=" * 60)
-    print("  Document AI Expert")
-    print(f"  Gen LLM:   {config.LLM_COMPLETIONS_URL}  [{config.LLM_MODEL_ID}]")
-    print(f"  Embed LLM: {config.EMBED_EMBEDDINGS_URL}  [{config.EMBEDDING_MODEL}]")
-    print(f"  ChromaDB:  {config.CHROMA_PERSIST_DIR}  (embedded)")
-    print(f"  Neo4j:     {config.NEO4J_URI}")
-    print("=" * 60)
+    mode_label  = "HF / CPU" if config.HF_MODE else "GPU / Desktop"
+    admin_label = "ENABLED" if config.ADMIN_MODE else "DISABLED (public mode)"
+    print("=" * 64)
+    print("  HealthExpert — Document AI Expert")
+    print(f"  Mode       : {mode_label}")
+    print(f"  Admin      : {admin_label}")
+    print(f"  Gen LLM    : {config.LLM_COMPLETIONS_URL}  [{config.LLM_MODEL_ID}]")
+    print(f"  Embed LLM  : {config.EMBED_EMBEDDINGS_URL}  [{config.EMBEDDING_MODEL}]")
+    print(f"  ChromaDB   : {config.CHROMA_PERSIST_DIR}  (embedded)")
+    print(f"  Neo4j      : {'DISABLED (HF mode)' if config.HF_MODE else config.NEO4J_URI}")
+    print(f"  KV Cache   : {'DISABLED (HF mode)' if not config.KV_CACHE_ENABLED else 'ENABLED'}")
+    print("=" * 64)
     
     import urllib3
     urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
     
     cert_path = str(Path(__file__).parent / "cert.pem")
-    key_path = str(Path(__file__).parent / "key.pem")
+    key_path  = str(Path(__file__).parent / "key.pem")
+    run_port  = int(os.environ.get("PORT", 5050))
     
-    if os.path.exists(cert_path) and os.path.exists(key_path) and not os.environ.get("SPACE_ID"):
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True, ssl_context=(cert_path, key_path))
+    # SSL: skip in HF mode (HF Spaces handles TLS termination at their proxy)
+    if os.path.exists(cert_path) and os.path.exists(key_path) and not config.HF_MODE:
+        app.run(host="0.0.0.0", port=run_port, debug=False, threaded=True,
+                ssl_context=(cert_path, key_path))
     else:
-        log.warning("SSL certificates not found or disabled (HF Space)! Running in HTTP mode.")
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5050)), debug=False, threaded=True)
+        if config.HF_MODE:
+            log.info("HF mode — running HTTP (TLS handled by HF Spaces proxy).")
+        else:
+            log.warning("SSL certificates not found — running in HTTP mode.")
+        app.run(host="0.0.0.0", port=run_port, debug=False, threaded=True)

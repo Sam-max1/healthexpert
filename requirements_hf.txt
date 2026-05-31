@@ -1,42 +1,33 @@
-# requirements.txt — Full GPU mode (desktop / server with CUDA)
-# For HuggingFace Spaces / CPU-only use requirements_hf.txt instead.
+# requirements_hf.txt — HuggingFace Spaces (CPU, 12 GB RAM, 16 GB disk)
+# Minimal dependency set for low-resource hackathon demo.
+# PyTorch CPU wheel is installed separately in Dockerfile.hf BEFORE this file.
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Web Framework
 flask>=3.0.0
 flask-cors>=4.0.0
 
-# LangChain
+# LangChain (core only — no community extras that pull in large deps)
 langchain>=0.2.0
 langchain-core>=0.2.0
 langchain-community>=0.2.0
 langchain-text-splitters>=0.3.0
 
-# CrewAI
+# CrewAI (query path bypasses ReAct loop; kept for ingest crew scaffold)
 crewai>=0.36.0
-crewai-tools>=0.4.0
 
-# Embeddings — full bge-m3 (dense + sparse + ColBERT) for GPU mode
+# Embeddings — lightweight sentence-transformers backend (bge-small ~130 MB)
 sentence-transformers>=3.0.0
-FlagEmbedding>=1.2.0
 
-# LLM Runtime — CUDA build of PyTorch installed separately (see requirements_gpu.txt)
-# bitsandbytes is only usable on CUDA; install separately if needed:
-#   pip install bitsandbytes
+# LLM Runtime — transformers only; bitsandbytes NOT included (CPU mode)
 transformers>=4.40.0
 accelerate>=0.34.0
 
-# Vector Database
+# Vector Database (embedded, no server required)
 chromadb>=0.5.0
 
 # Hybrid Search
 rank-bm25>=0.2.2
-
-# Encryption
-cryptography>=41.0.0
-
-# Graph Database
-neo4j>=5.18.0
 
 # Document Loaders
 PyMuPDF>=1.24.0
@@ -52,6 +43,9 @@ python-dotenv>=1.0.0
 tqdm>=4.66.0
 numpy>=1.24.0
 pydantic>=2.0.0
+
+# Encryption (for session security key)
+cryptography>=41.0.0
 
 # System monitoring (CPU/RAM banner in UI)
 psutil>=5.9.0

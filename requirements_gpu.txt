@@ -1,0 +1,53 @@
+# Web Framework
+flask>=3.0.0
+flask-cors>=4.0.0
+
+# LangChain
+langchain>=0.2.0
+langchain-core>=0.2.0
+langchain-community>=0.2.0
+
+# CrewAI
+crewai>=0.36.0
+crewai-tools>=0.4.0
+
+# Embeddings
+sentence-transformers>=3.0.0
+FlagEmbedding>=1.2.0
+
+# LLM Runtime
+torch>=2.6.0
+transformers @ git+https://github.com/huggingface/transformers.git
+accelerate>=0.34.0
+bitsandbytes>=0.43.0
+langchain-text-splitters>=0.3.0
+pydantic>=2.0.0
+
+# Vector Database (ChromaDB — embedded, no server required)
+chromadb>=0.5.0
+
+# Hybrid Search (DB25: Dense + BM25 via Reciprocal Rank Fusion)
+rank-bm25>=0.2.2
+
+# Encryption
+cryptography>=41.0.0
+
+# Graph Database
+neo4j>=5.18.0
+
+# Document Loaders
+PyMuPDF>=1.24.0        # PDF
+python-docx>=1.1.0     # DOCX
+openpyxl>=3.1.0        # XLSX
+pandas>=2.0.0          # CSV + XLSX
+pytesseract>=0.3.10    # Image OCR
+Pillow>=10.0.0         # Image processing
+
+# Utilities
+requests>=2.31.0
+python-dotenv>=1.0.0
+tqdm>=4.66.0
+numpy>=1.24.0
+
+# Dev
+uvicorn>=0.29.0

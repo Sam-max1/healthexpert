@@ -13,6 +13,8 @@ _available = False
 
 def _get_driver():
     global _driver, _available
+    if not getattr(config, 'NEO4J_AVAILABLE', True):
+        return None
     if _driver is not None:
         return _driver
     try:

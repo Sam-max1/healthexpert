@@ -9,6 +9,13 @@
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap"/>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <!-- Server-side mode flags exposed to JS -->
+  <script>
+    window.APP_CONFIG = {
+      hfMode:    {{ 'true' if config.HF_MODE else 'false' }},
+      adminMode: {{ 'true' if config.ADMIN_MODE else 'false' }},
+    };
+  </script>
 </head>
 <body>
 
@@ -40,13 +47,42 @@
     </div>
     <!-- Admin controls -->
     <div id="admin-controls" style="display:none; gap:8px; align-items:center;">
-      <button class="docker-btn" id="db-up-btn" title="Start Databases">▶ DB Up</button>
-      <button class="docker-btn warn" id="db-down-btn" title="Stop Databases">■ DB Down</button>
-      <button class="docker-btn danger" id="db-purge-btn" title="Wipe all data">⚠ Purge DB</button>
-      <button class="docker-btn danger" id="app-kill-btn" title="Kill application" style="background:#e53e3e">☠ Kill Switch</button>
+      <button class="docker-btn" id="db-up-btn" data-tooltip="Start Databases">▶ DB Up</button>
+      <button class="docker-btn warn" id="db-down-btn" data-tooltip="Stop Databases">■ DB Down</button>
+      <button class="docker-btn danger" id="db-purge-btn" data-tooltip="Wipe all data">⚠ Purge DB</button>
+      <button class="docker-btn danger" id="app-kill-btn" data-tooltip="Kill application" style="background:#e53e3e">☠ Kill Switch</button>
     </div>
   </div>
 </header>
+
+<!-- ── Resource Monitor Banner ─────────────────────────────────────────────── -->
+<div id="resource-banner">
+  <div id="resource-banner-inner">
+    <span class="res-label">&#127760; System</span>
+    <div class="res-item" id="res-cpu" data-tooltip="CPU utilisation">
+      <span class="res-icon">&#9881;&#65039;</span>
+      <span id="res-cpu-label">CPU: —</span>
+      <span class="res-bar-wrap"><span class="res-bar" id="res-cpu-bar"></span></span>
+      <span class="res-pct" id="res-cpu-pct">--%</span>
+    </div>
+    <div class="res-divider"></div>
+    <div class="res-item" id="res-ram" data-tooltip="RAM usage">
+      <span class="res-icon">&#128190;</span>
+      <span id="res-ram-label">RAM: —</span>
+      <span class="res-bar-wrap"><span class="res-bar" id="res-ram-bar"></span></span>
+      <span class="res-pct" id="res-ram-pct">--%</span>
+    </div>
+    <div class="res-divider"></div>
+    <div class="res-item" id="res-disk" data-tooltip="Disk free space">
+      <span class="res-icon">&#128190;</span>
+      <span id="res-disk-label">Disk: —</span>
+      <span class="res-bar-wrap"><span class="res-bar" id="res-disk-bar"></span></span>
+      <span class="res-pct" id="res-disk-pct">--%</span>
+    </div>
+    <div class="res-divider"></div>
+    <span class="res-mode-badge" id="res-mode-badge"></span>
+  </div>
+</div>
 
 <!-- ── Three-panel workspace ───────────────────────────────────────────────── -->
 <main id="workspace">
@@ -95,7 +131,7 @@
       <!-- Document list (Knowledge Base) -->
       <div class="kb-header-row">
         <div class="kb-label">Knowledge Base</div>
-        <button id="refresh-docs-btn" class="icon-btn" title="Refresh document list">⟳</button>
+        <button id="refresh-docs-btn" class="icon-btn" data-tooltip="Refresh document list">⟳</button>
       </div>
       <div id="doc-list"></div>
     </div>
@@ -127,11 +163,11 @@
       <!-- Default prompt test buttons -->
       <div id="prompt-presets" style="margin-bottom: 8px; flex-wrap: wrap;">
         <button class="preset-btn" id="preset-gen"
-                title="Send a test prompt to the Gen LLM server (port 8002)">
+                data-tooltip="Send a test prompt to the Gen LLM server (port 8002)">
           🧠 Test Gen LLM
         </button>
         <button class="preset-btn" id="preset-embed"
-                title="Send a test sentence to the Embed LLM server (port 8003)">
+                data-tooltip="Send a test sentence to the Embed LLM server (port 8003)">
           🔢 Test Embed LLM
         </button>
       </div>
@@ -209,6 +245,25 @@
     <div style="display:flex; gap:8px; justify-content:flex-end;">
       <button class="modal-close-btn" id="tier-modal-cancel" style="background:var(--bg-panel); color:var(--text);">Cancel</button>
       <button class="modal-close-btn" id="tier-modal-confirm">Upload</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── Captcha modal ───────────────────────────────────────────────────────── -->
+<div id="captcha-modal" class="modal-overlay" style="display:none">
+  <div class="modal-card">
+    <div class="modal-title">Security Check</div>
+    <div class="modal-body" style="margin-bottom:16px;">
+      <p style="margin-bottom: 8px;">Please solve the math problem to prevent bot uploads:</p>
+      <div style="display:flex; align-items:center; gap:8px; background:var(--bg-panel); padding:12px; border-radius:6px; font-size:16px; font-family:var(--font-mono);">
+        <span id="captcha-question" style="font-weight:bold;"></span>
+        <input type="number" id="captcha-input" style="flex:1; padding:6px 10px; border-radius:4px; border:1px solid var(--border);" placeholder="Answer" />
+      </div>
+      <div id="captcha-error" style="color:var(--danger); font-size:13px; margin-top:8px; display:none;">Incorrect answer. Please try again.</div>
+    </div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="modal-close-btn" id="captcha-modal-cancel" style="background:var(--bg-panel); color:var(--text);">Cancel</button>
+      <button class="modal-close-btn" id="captcha-modal-verify">Verify & Upload</button>
     </div>
   </div>
 </div>

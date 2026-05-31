@@ -11,7 +11,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - Updated GitHub-facing release artifacts and version references to 1.0.1.
 - Refreshed reported issue template guidance to reflect the new release tag.
 
-## [1.0.0] - 2024-05-28
+## [1.2.0] - 2026-05-31
+
+### Added
+- 🛡️ **HuggingFace Security Limits**: Hardened deployment with math CAPTCHA, 1MB per-file limit, 5 files per-session ingest limit, and 500 vector DB chunk capacity.
+- 🚫 **Headless API Blocking**: Programmatic access to `/api/v1/` is now entirely blocked in public (`-noadmin`) mode to prevent scraping or API abuse.
+- ✨ **Premium Tooltips**: Upgraded native browser tooltips to styled CSS hover components across the UI.
+- ⚡ **Expanded Token Limits**: Increased HF mode output generation limit from 256 to 1024 tokens.
+- 🔇 **Quiet Logging**: Suppressed excessive `httpx` / `filelock` console logs in public deployments.
+
+## [1.1.0] - 2026-05-31
+
+### Added
+- 🌩️ **HuggingFace Native Deployment**: Full CPU-optimised dockerization for HF Spaces (`-hf` CLI switch).
+- 🧠 **Dynamic Models**: Swapped embedding (bge-small) and generation (Qwen2.5-1.5B) targets dynamically to stay under 12GB RAM budgets.
+- 📊 **Resource Banner**: Real-time polling for CPU/RAM/Disk stats in the UI.
+
+## [1.0.1] - 2026-05-29
 
 ### Added
 
@@ -120,6 +136,7 @@ None at this time. Please report issues to [GitHub Issues](https://github.com/Sa
 
 ## Version History
 
+- **1.2.0** - HF Security Hardening, Captcha, UI Tooltips, Token increase (May 31, 2026)
 - **1.1.0** - Added headless API endpoints, HuggingFace Docker support, and updated version tag (May 31, 2026)
 - **1.0.1** - Release artifact refresh and version tag update (May 29, 2026)
 - **1.0.0** - Initial release (May 28, 2024)

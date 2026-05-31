@@ -1,0 +1,72 @@
+# Dockerfile.hf — HuggingFace Spaces optimised image
+#
+# Target environment:
+#   2 vCPU  |  12 GB RAM  |  16 GB disk  |  No GPU
+#   Python 3.12.12  |  PyTorch CPU-only
+#
+# Local test:
+#   docker build -f Dockerfile.hf -t healthexpert-hf .
+#   docker run -p 7860:7860 --memory="12g" --cpus="2" healthexpert-hf
+#
+# Push to HuggingFace:
+#   Build is triggered automatically when this Dockerfile is in the Space repo root
+#   (rename to Dockerfile before pushing to HF).
+
+FROM python:3.12.12-slim
+
+# ── System dependencies ────────────────────────────────────────────────────────
+# Minimal set: OCR engine + OpenCV headless libs only.
+# No build-essential, no git (not needed at runtime).
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    tesseract-ocr \
+    libgl1 \
+    libglib2.0-0 \
+    libgomp1 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# ── Python environment ─────────────────────────────────────────────────────────
+# CRITICAL: Install CPU-only PyTorch FIRST to prevent pip pulling the 2.5 GB CUDA build.
+# CPU wheel is ~260 MB vs 2.5 GB for CUDA — essential for 16 GB disk constraint.
+RUN pip install --no-cache-dir \
+    torch==2.5.1+cpu \
+    torchvision==0.20.1+cpu \
+    torchaudio==2.5.1+cpu \
+    --index-url https://download.pytorch.org/whl/cpu
+
+# ── Application dependencies ───────────────────────────────────────────────────
+COPY requirements_hf.txt .
+RUN pip install --no-cache-dir -r requirements_hf.txt
+
+# ── Application codebase ───────────────────────────────────────────────────────
+COPY . .
+
+# Remove GPU-mode files to keep image clean (optional, saves ~1 MB)
+RUN rm -f requirements_gpu.txt Dockerfile_bak
+
+RUN chmod +x start.sh
+
+# ── Environment configuration ─────────────────────────────────────────────────
+# HF_MODE=1 activates low-resource path in config.py, gen_llm.py, embed_llm.py
+ENV HF_MODE=1
+ENV ADMIN_MODE=1
+ENV PORT=7860
+
+# HuggingFace model cache — use /app/models to keep within Space storage
+ENV HF_HOME=/app/models
+ENV TRANSFORMERS_CACHE=/app/models
+ENV SENTENCE_TRANSFORMERS_HOME=/app/models
+
+# Suppress noisy PyTorch/tokenizer warnings in logs
+ENV PYTHONWARNINGS=ignore
+ENV TOKENIZERS_PARALLELISM=false
+
+# ── Port ──────────────────────────────────────────────────────────────────────
+EXPOSE 7860
+
+# ── Entrypoint ────────────────────────────────────────────────────────────────
+# -hf activates low-resource mode; ADMIN_MODE env var controls admin controls.
+# To disable admin controls for public endpoint, set ENV ADMIN_MODE=0 above
+# or pass -noadmin here.
+ENTRYPOINT ["bash", "start.sh", "-hf"]
