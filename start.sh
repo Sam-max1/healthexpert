@@ -34,7 +34,7 @@ export ADMIN_MODE=$ADMIN_MODE_FLAG
 if [ "$HF_MODE_FLAG" -eq 1 ]; then
   export GEN_MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"
   export EMBED_MODEL_ID="BAAI/bge-small-en-v1.5"
-  export LLM_MAX_TOKENS=256
+  export LLM_MAX_TOKENS=1024
   export EMBEDDING_BATCH_SIZE=2
   export EMBED_FP16=false          # CPU only — FP16 unsupported
   export TORCH_COMPILE_SKIP=1      # Skip torch.compile() on CPU (no benefit, adds 30s startup)
