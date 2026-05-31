@@ -342,6 +342,92 @@ def admin_kill():
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
+def process_document_pipeline(path: str, orig_name: str, tier: str, token: str, delete_after: bool = True) -> dict:
+    step_log = []
+    added = 0
+    try:
+        step_log.append(f"[{orig_name}] Starting ingestion pipeline…")
+        log.info("Ingesting %s", orig_name)
+
+        # Step 1: load
+        step_log.append(f"[{orig_name}] Loading document…")
+        docs = document_loader.load_document(path)
+        step_log.append(f"[{orig_name}] Loaded {len(docs)} page(s).")
+        log.info("%s loaded — %d pages", orig_name, len(docs))
+
+        # Step 2: chunk
+        step_log.append(f"[{orig_name}] Chunking…")
+        chunks = chunker.chunk_documents(docs)
+        if not chunks:
+            raise ValueError("No text could be extracted from this document.")
+        step_log.append(f"[{orig_name}] Created {len(chunks)} chunks.")
+        log.info("%s → %d chunks", orig_name, len(chunks))
+
+        # Step 3: embed
+        step_log.append(f"[{orig_name}] Embedding via embed_llm (port 8003)…")
+        texts      = [c["text"] for c in chunks]
+        embeddings = embedder.embed_texts(texts)
+        step_log.append(f"[{orig_name}] Embedded {len(embeddings)} vectors (dim={len(embeddings[0]) if embeddings else '?'}).")
+        log.info("%s embedded", orig_name)
+
+        # Step 4: store in vector DB
+        step_log.append(f"[{orig_name}] Storing in ChromaDB (tier: {tier}, session: {token})…")
+        if config.HF_MODE and vector_store.count() + len(chunks) > 500:
+            allowed = 500 - vector_store.count()
+            if allowed <= 0:
+                raise ValueError("Vector database full (500 chunk limit).")
+            chunks = chunks[:allowed]
+            embeddings = embeddings[:allowed]
+            step_log.append(f"[{orig_name}] WARNING: Truncated to {allowed} chunks due to global 500 chunk limit.")
+            
+        doc_id  = uuid.uuid4().hex[:8]
+        added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
+        step_log.append(f"[{orig_name}] Stored {added} chunks in vector DB (doc_id={doc_id}).")
+        log.info("%s stored %d chunks in ChromaDB", orig_name, added)
+
+        # Step 5: entity extraction → graph
+        if graph_store.is_available():
+            step_log.append(f"[{orig_name}] Extracting entities via gen_llm (port 8002)…")
+            sample_text = "\n\n".join(d["text"] for d in docs[:3])[:3000]
+            from agents.llm import get_llm
+            llm = get_llm()
+            prompt = (
+                "Extract key entities from the text below.\n"
+                "Return a JSON array of objects with keys: name, type, relations.\n"
+                "type must be a broad category like: Person, Organization, Location, Concept, Event, Document, Object, Rule.\n"
+                "relations is a list of {target, rel} objects.\n"
+                "Return ONLY the JSON array.\n\n"
+                f"TEXT:\n{sample_text}\n\nJSON:"
+            )
+            raw = llm.call([{"role": "user", "content": prompt}])
+            start, end = raw.find("["), raw.rfind("]") + 1
+            if start != -1 and end > start:
+                try:
+                    entities = json.loads(raw[start:end])
+                    graph_store.store_entities(entities, orig_name, tier=tier, session_token=token)
+                    step_log.append(f"[{orig_name}] Stored {len(entities)} entities in Neo4j.")
+                except json.JSONDecodeError as je:
+                    step_log.append(f"[{orig_name}] Failed to parse JSON entities: {je}")
+                    log.warning("JSON decode error during entity extraction for %s: %s", orig_name, je)
+            else:
+                step_log.append(f"[{orig_name}] No JSON array boundaries found in LLM output (skipped graph step).")
+        else:
+            step_log.append(f"[{orig_name}] Neo4j offline — graph extraction skipped.")
+
+        return {"ok": True, "result": f"Ingested {added} chunks", "log": step_log, "added": added}
+    except Exception as exc:
+        step_log.append(f"[{orig_name}] ERROR: {exc}")
+        log.exception("Ingestion failed for %s", orig_name)
+        return {"ok": False, "result": str(exc), "log": step_log, "added": added}
+    finally:
+        if delete_after and os.path.exists(path):
+            try:
+                os.remove(path)
+                log.info("Deleted local upload file: %s", path)
+            except OSError as e:
+                log.warning("Failed to delete %s: %s", path, e)
+
+
 @app.route("/api/ingest", methods=["POST"])
 def ingest():
     """Upload and asynchronously ingest one or more documents."""
@@ -418,97 +504,11 @@ def ingest():
     def _worker(sess_token):
         config.current_session.set(sess_token)
         for path, orig_name in saved_paths:
-            step_log = []
-            try:
-                step_log.append(f"[{orig_name}] Starting ingestion pipeline…")
-                log.info("Job %s: ingesting %s", job_id, orig_name)
+            res = process_document_pipeline(path, orig_name, tier, token, delete_after=True)
+            res["file"] = orig_name
+            _jobs[job_id]["results"].append(res)
+            _jobs[job_id]["log"].extend(res["log"])
 
-                # Step 1: load
-                step_log.append(f"[{orig_name}] Loading document…")
-                docs = document_loader.load_document(path)
-                step_log.append(f"[{orig_name}] Loaded {len(docs)} page(s).")
-                log.info("Job %s: %s loaded — %d pages", job_id, orig_name, len(docs))
-
-                # Step 2: chunk
-                step_log.append(f"[{orig_name}] Chunking…")
-                chunks = chunker.chunk_documents(docs)
-                if not chunks:
-                    raise ValueError("No text could be extracted from this document.")
-                step_log.append(f"[{orig_name}] Created {len(chunks)} chunks.")
-                log.info("Job %s: %s → %d chunks", job_id, orig_name, len(chunks))
-
-                # Step 3: embed
-                step_log.append(f"[{orig_name}] Embedding via embed_llm (port 8003)…")
-                texts      = [c["text"] for c in chunks]
-                embeddings = embedder.embed_texts(texts)
-                step_log.append(f"[{orig_name}] Embedded {len(embeddings)} vectors (dim={len(embeddings[0]) if embeddings else '?'}).")
-                log.info("Job %s: %s embedded", job_id, orig_name)
-
-                # Step 4: store in vector DB
-                step_log.append(f"[{orig_name}] Storing in ChromaDB (tier: {tier}, session: {token})…")
-                if config.HF_MODE and vector_store.count() + len(chunks) > 500:
-                    allowed = 500 - vector_store.count()
-                    if allowed <= 0:
-                        raise ValueError("Vector database full (500 chunk limit).")
-                    chunks = chunks[:allowed]
-                    embeddings = embeddings[:allowed]
-                    step_log.append(f"[{orig_name}] WARNING: Truncated to {allowed} chunks due to global 500 chunk limit.")
-                    
-                doc_id  = uuid.uuid4().hex[:8]
-                added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
-                step_log.append(f"[{orig_name}] Stored {added} chunks in vector DB (doc_id={doc_id}).")
-                log.info("Job %s: %s stored %d chunks in ChromaDB", job_id, orig_name, added)
-
-                # Step 5: entity extraction → graph
-                if graph_store.is_available():
-                    step_log.append(f"[{orig_name}] Extracting entities via gen_llm (port 8002)…")
-                    sample_text = "\n\n".join(d["text"] for d in docs[:3])[:3000]
-                    from agents.llm import get_llm
-                    llm = get_llm()
-                    prompt = (
-                        "Extract key entities from the text below.\n"
-                        "Return a JSON array of objects with keys: name, type, relations.\n"
-                        "type must be a broad category like: Person, Organization, Location, Concept, Event, Document, Object, Rule.\n"
-                        "relations is a list of {target, rel} objects.\n"
-                        "Return ONLY the JSON array.\n\n"
-                        f"TEXT:\n{sample_text}\n\nJSON:"
-                    )
-                    raw = llm.call([{"role": "user", "content": prompt}])
-                    start, end = raw.find("["), raw.rfind("]") + 1
-                    if start != -1 and end > start:
-                        try:
-                            entities = json.loads(raw[start:end])
-                            graph_store.store_entities(entities, orig_name, tier=tier, session_token=token)
-                            step_log.append(f"[{orig_name}] Stored {len(entities)} entities in Neo4j.")
-                        except json.JSONDecodeError as je:
-                            step_log.append(f"[{orig_name}] Failed to parse JSON entities: {je}")
-                            log.warning("JSON decode error during entity extraction for %s: %s", orig_name, je)
-                    else:
-                        step_log.append(f"[{orig_name}] No JSON array boundaries found in LLM output (skipped graph step).")
-                else:
-                    step_log.append(f"[{orig_name}] Neo4j offline — graph extraction skipped.")
-
-                _jobs[job_id]["results"].append({
-                    "file": orig_name, "ok": True,
-                    "result": f"Ingested {added} chunks",
-                    "log": step_log,
-                })
-            except Exception as exc:
-                step_log.append(f"[{orig_name}] ERROR: {exc}")
-                log.exception("Job %s: ingestion failed for %s", job_id, orig_name)
-                _jobs[job_id]["results"].append({
-                    "file": orig_name, "ok": False,
-                    "result": str(exc), "log": step_log,
-                })
-            finally:
-                if os.path.exists(path):
-                    try:
-                        os.remove(path)
-                        log.info("Deleted local upload file: %s", path)
-                    except OSError as e:
-                        log.warning("Failed to delete %s: %s", path, e)
-                        
-            _jobs[job_id]["log"].extend(step_log)
         _jobs[job_id]["status"] = "done"
         log.info("Job %s complete — %d results", job_id,
                  len(_jobs[job_id]["results"]))
@@ -761,6 +761,54 @@ def probe_embed():
         return jsonify({"ok": False, "error": str(exc)}), 502
 
 
+def start_auto_ingest_thread():
+    def _auto_ingest_worker():
+        kbdocs_dir = Path(__file__).parent / "kbdocs"
+        if not kbdocs_dir.exists():
+            return
+            
+        import requests, time
+        log.info("Auto-ingest: waiting for LLM services to boot...")
+        # Wait up to 60s for models
+        for _ in range(30):
+            try:
+                r1 = requests.get(f"{config.EMBED_BASE_URL}/health", timeout=2)
+                r2 = requests.get(f"{config.LLM_BASE_URL}/health", timeout=2)
+                if r1.status_code == 200 and r2.status_code == 200:
+                    break
+            except Exception:
+                pass
+            time.sleep(2)
+        else:
+            log.warning("Auto-ingest aborted: LLM services not online.")
+            return
+
+        # Check existing documents to avoid re-ingesting
+        existing = {d["source"] for d in vector_store.list_documents("admin")}
+        files_to_ingest = []
+        for f in kbdocs_dir.iterdir():
+            if f.is_file() and _allowed(f.name) and f.name not in existing:
+                files_to_ingest.append(f)
+                
+        if not files_to_ingest:
+            log.info("Auto-ingest: no new files found in kbdocs.")
+            return
+            
+        log.info("Auto-ingesting %d files from kbdocs...", len(files_to_ingest))
+        config.current_session.set("admin")
+        
+        for path in files_to_ingest:
+            res = process_document_pipeline(str(path), path.name, tier="foundation", token="admin", delete_after=False)
+            if res["ok"]:
+                log.info("Auto-ingest successful for %s", path.name)
+            else:
+                log.error("Auto-ingest failed for %s: %s", path.name, res["result"])
+                
+        trigger_kv_cache_update("admin")
+        
+    threading.Thread(target=_auto_ingest_worker, daemon=True).start()
+
+
 if __name__ == "__main__":
     mode_label  = "HF / CPU" if config.HF_MODE else "GPU / Desktop"
     admin_label = "ENABLED" if config.ADMIN_MODE else "DISABLED (public mode)"
@@ -781,6 +829,8 @@ if __name__ == "__main__":
     cert_path = str(Path(__file__).parent / "cert.pem")
     key_path  = str(Path(__file__).parent / "key.pem")
     run_port  = int(os.environ.get("PORT", 5050))
+    
+    start_auto_ingest_thread()
     
     # SSL: skip in HF mode (HF Spaces handles TLS termination at their proxy)
     if os.path.exists(cert_path) and os.path.exists(key_path) and not config.HF_MODE:

@@ -49,3 +49,4 @@ cryptography>=41.0.0
 
 # System monitoring (CPU/RAM banner in UI)
 psutil>=5.9.0
+rank_bm25
