@@ -17,11 +17,18 @@ for _arg in sys.argv[1:]:
 
 import os
 os.environ["PYTHONWARNINGS"] = "ignore"
+# Suppress HuggingFace Hub unauthenticated-request noise before any imports
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 import uuid, json, threading, subprocess, logging, warnings, signal, time
 from pathlib import Path
 
 warnings.filterwarnings("ignore", category=ImportWarning)
 warnings.filterwarnings("ignore", category=DeprecationWarning)
+warnings.filterwarnings("ignore", category=UserWarning)
+warnings.filterwarnings("ignore", message=".*register_constant.*")
+warnings.filterwarnings("ignore", message=".*Enum subclass.*")
+warnings.filterwarnings("ignore", message=".*unauthenticated.*")
 from flask import Flask, render_template, request, jsonify, Response, stream_with_context
 
 import sys
@@ -33,10 +40,35 @@ from agents.crew import run_ingest_crew, run_query_crew
 log = logging.getLogger("app")
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [app] %(levelname)s %(message)s")
-logging.getLogger("werkzeug").setLevel(logging.ERROR)
-logging.getLogger("numexpr").setLevel(logging.ERROR)
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("filelock").setLevel(logging.WARNING)
+
+# ── Silence noisy third-party loggers ─────────────────────────────────────────
+for _quiet in (
+    "werkzeug",
+    "numexpr",
+    "httpx",
+    "filelock",
+    "pikepdf",
+    "pikepdf._core",
+    "unstructured",
+    "unstructured.partition",
+    "unstructured.partition.pdf",
+    "pdfminer",
+    "pdfminer.pdfdocument",
+    "pdfminer.pdfpage",
+    "pdfminer.converter",
+    "huggingface_hub",
+    "huggingface_hub.utils",
+    "huggingface_hub.utils._validators",
+    "transformers",
+    "sentence_transformers",
+    "detectron2",
+    "pytesseract",
+    "PIL",
+    "torch",
+    "torch.utils",
+    "torch.utils._pytree",
+):
+    logging.getLogger(_quiet).setLevel(logging.ERROR)
 
 # Capture all Python warnings and route them to the py.warnings logger, then silence it
 logging.captureWarnings(True)
@@ -50,7 +82,19 @@ os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
 
 # In-memory job tracker for async ingestion
 _jobs: dict[str, dict] = {}
+_active_graph_tasks = 0
 _session_uploads: dict[str, int] = {}
+
+# Auto-ingest background progress tracker
+_auto_ingest_status: dict = {
+    "running": False,
+    "done": False,
+    "total": 0,
+    "completed": 0,
+    "current_file": None,
+    "results": [],
+    "error": None,
+}
 
 # RBAC Session Tracking
 _active_sessions: dict[str, float] = {}
@@ -205,7 +249,7 @@ def status():
         "gen_llm":    {
             "endpoint": config.LLM_BASE_URL,
             "online":   gen_ok,
-            "model":    gen_info.get("model", config.LLM_MODEL_ID),
+            "model":    "-".join(gen_info.get("model", config.LLM_MODEL_ID).split("-")[:2]) if "-" in gen_info.get("model", config.LLM_MODEL_ID) else gen_info.get("model", config.LLM_MODEL_ID),
             "gpu_id":   gen_info.get("gpu_id", "cpu"),
             "kv_cache_length": gen_info.get("kv_cache_length", 0),
         },
@@ -274,6 +318,7 @@ def sysinfo():
             "disk_free_gb": disk_free_gb,
             "disk_pct":     disk_pct,
             "hf_mode":      config.HF_MODE,
+            "active_graph_tasks": _active_graph_tasks,
         })
     except Exception as exc:
         log.warning("sysinfo failed: %s", exc)
@@ -291,7 +336,7 @@ def list_documents():
 
 @app.route("/api/docker/<action>", methods=["POST"])
 def docker_control(action: str):
-    """Control Neo4j docker container. action: up | down | restart"""
+    """Control Kuzu docker container. action: up | down | restart"""
     if not config.ADMIN_MODE:
         return jsonify({"error": "Admin mode is disabled on this deployment."}), 403
     if not is_admin():
@@ -342,6 +387,112 @@ def admin_kill():
 
 # ── Ingestion ─────────────────────────────────────────────────────────────────
 
+def _extract_entities_async(
+    docs: list[dict],
+    orig_name: str,
+    tier: str,
+    token: str,
+) -> None:
+    """Fire-and-forget entity extraction → Kuzu graph using fast local spaCy pipeline (non-LLM)."""
+    if not graph_store.is_available():
+        return
+        
+    global _active_graph_tasks
+    _active_graph_tasks += 1
+    try:
+        import spacy
+        try:
+            nlp = spacy.load("en_core_web_sm")
+        except OSError:
+            log.warning("spaCy model 'en_core_web_sm' not found. Attempting to download...")
+            try:
+                import spacy.cli
+                spacy.cli.download("en_core_web_sm")
+                nlp = spacy.load("en_core_web_sm")
+            except Exception as e:
+                log.error("Failed to download or load spaCy model 'en_core_web_sm': %s. Graph extraction skipped.", e)
+                return
+
+        text = "\n\n".join(d["text"] for d in docs)
+        
+        # spaCy max length limit
+        if len(text) > 1000000:
+            text = text[:1000000]
+
+        log.info("Entity extraction (spaCy) starting for %s...", orig_name)
+        doc = nlp(text)
+        
+        entities = []
+        # Group entities by sentence to establish co-occurrence relationships
+        for sent in doc.sents:
+            # Filter for specific entity types
+            sent_ents = [ent for ent in sent.ents if ent.label_ in {"PERSON", "ORG", "GPE", "LOC", "FAC", "PRODUCT", "EVENT", "WORK_OF_ART", "LAW"}]
+            if not sent_ents:
+                continue
+            
+            # Map spaCy labels to our schema types
+            def _map_type(label: str) -> str:
+                if label == "PERSON": return "Person"
+                if label == "ORG": return "Organization"
+                if label in {"GPE", "LOC", "FAC"}: return "Location"
+                if label == "EVENT": return "Event"
+                if label == "PRODUCT": return "Object"
+                if label in {"WORK_OF_ART", "LAW"}: return "Rule"
+                return "Concept"
+            
+            # Create entity objects and cross-link within the same sentence
+            for i, ent1 in enumerate(sent_ents):
+                name1 = ent1.text.strip()
+                if not name1 or len(name1) < 2:
+                    continue
+                
+                relations = []
+                for j, ent2 in enumerate(sent_ents):
+                    if i != j:
+                        name2 = ent2.text.strip()
+                        if name2 and name2 != name1:
+                            relations.append({"target": name2, "rel": "RELATED_TO"})
+                
+                # Deduplicate relations
+                unique_rels = []
+                seen_targets = set()
+                for r in relations:
+                    if r["target"] not in seen_targets:
+                        seen_targets.add(r["target"])
+                        unique_rels.append(r)
+                
+                entities.append({
+                    "name": name1,
+                    "type": _map_type(ent1.label_),
+                    "relations": unique_rels
+                })
+
+        # Deduplicate the entities list by name before sending to Kuzu
+        dedup_entities = {}
+        for ent in entities:
+            if ent["name"] not in dedup_entities:
+                dedup_entities[ent["name"]] = ent
+            else:
+                # Merge relations
+                existing_rels = {r["target"] for r in dedup_entities[ent["name"]]["relations"]}
+                for rel in ent["relations"]:
+                    if rel["target"] not in existing_rels:
+                        dedup_entities[ent["name"]]["relations"].append(rel)
+                        existing_rels.add(rel["target"])
+
+        final_entities = list(dedup_entities.values())
+
+        if final_entities:
+            graph_store.store_entities(final_entities, orig_name, tier=tier, session_token=token)
+            log.info("Entity extraction (spaCy) for %s: %d unique entities stored in Kuzu", orig_name, len(final_entities))
+        else:
+            log.info("Entity extraction (spaCy) for %s: No entities found", orig_name)
+
+    except Exception as exc:
+        log.warning("Entity extraction background task failed for %s: %s", orig_name, exc)
+    finally:
+        _active_graph_tasks -= 1
+
 def process_document_pipeline(path: str, orig_name: str, tier: str, token: str, delete_after: bool = True) -> dict:
     step_log = []
     added = 0
@@ -372,47 +523,30 @@ def process_document_pipeline(path: str, orig_name: str, tier: str, token: str, 
 
         # Step 4: store in vector DB
         step_log.append(f"[{orig_name}] Storing in ChromaDB (tier: {tier}, session: {token})…")
-        if config.HF_MODE and vector_store.count() + len(chunks) > 500:
-            allowed = 500 - vector_store.count()
+        if config.HF_MODE and vector_store.count() + len(chunks) > 10000:
+            allowed = 10000 - vector_store.count()
             if allowed <= 0:
-                raise ValueError("Vector database full (500 chunk limit).")
+                raise ValueError("Vector database full (10000 chunk limit).")
             chunks = chunks[:allowed]
             embeddings = embeddings[:allowed]
-            step_log.append(f"[{orig_name}] WARNING: Truncated to {allowed} chunks due to global 500 chunk limit.")
-            
+            step_log.append(f"[{orig_name}] WARNING: Truncated to {allowed} chunks due to global 10000 chunk limit.")
+
         doc_id  = uuid.uuid4().hex[:8]
         added   = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
         step_log.append(f"[{orig_name}] Stored {added} chunks in vector DB (doc_id={doc_id}).")
         log.info("%s stored %d chunks in ChromaDB", orig_name, added)
 
-        # Step 5: entity extraction → graph
+        # Step 5: entity extraction → graph (non-blocking — runs in daemon thread)
         if graph_store.is_available():
-            step_log.append(f"[{orig_name}] Extracting entities via gen_llm (port 8002)…")
-            sample_text = "\n\n".join(d["text"] for d in docs[:3])[:3000]
-            from agents.llm import get_llm
-            llm = get_llm()
-            prompt = (
-                "Extract key entities from the text below.\n"
-                "Return a JSON array of objects with keys: name, type, relations.\n"
-                "type must be a broad category like: Person, Organization, Location, Concept, Event, Document, Object, Rule.\n"
-                "relations is a list of {target, rel} objects.\n"
-                "Return ONLY the JSON array.\n\n"
-                f"TEXT:\n{sample_text}\n\nJSON:"
-            )
-            raw = llm.call([{"role": "user", "content": prompt}])
-            start, end = raw.find("["), raw.rfind("]") + 1
-            if start != -1 and end > start:
-                try:
-                    entities = json.loads(raw[start:end])
-                    graph_store.store_entities(entities, orig_name, tier=tier, session_token=token)
-                    step_log.append(f"[{orig_name}] Stored {len(entities)} entities in Neo4j.")
-                except json.JSONDecodeError as je:
-                    step_log.append(f"[{orig_name}] Failed to parse JSON entities: {je}")
-                    log.warning("JSON decode error during entity extraction for %s: %s", orig_name, je)
-            else:
-                step_log.append(f"[{orig_name}] No JSON array boundaries found in LLM output (skipped graph step).")
+            step_log.append(f"[{orig_name}] Entity extraction queued (background thread)…")
+            threading.Thread(
+                target=_extract_entities_async,
+                args=(docs, orig_name, tier, token),
+                daemon=True,
+                name=f"entity-{orig_name[:20]}",
+            ).start()
         else:
-            step_log.append(f"[{orig_name}] Neo4j offline — graph extraction skipped.")
+            step_log.append(f"[{orig_name}] Kuzu offline — graph extraction skipped.")
 
         return {"ok": True, "result": f"Ingested {added} chunks", "log": step_log, "added": added}
     except Exception as exc:
@@ -456,8 +590,8 @@ def ingest():
             return jsonify({"error": f"Session limit exceeded. You can only upload 5 files per session. (Current: {current_uploads})"}), 429
             
         current_chunks = vector_store.count()
-        if current_chunks >= 500:
-            return jsonify({"error": "Vector database is full (500 chunk limit reached). Please wait for an admin to purge."}), 429
+        if current_chunks >= 10000:
+            return jsonify({"error": "Vector database is full (10000 chunk limit reached). Please wait for an admin to purge."}), 429
             
         _session_uploads[token] = current_uploads + len(files)
         
@@ -474,8 +608,9 @@ def ingest():
             rejected.append(f"{f.filename} — unsupported type '{ext}'")
             log.warning("Rejected file %s — extension not in ALLOWED_EXTENSIONS", f.filename)
             continue
-        safe_name = f"{uuid.uuid4().hex[:6]}_{Path(f.filename).name}"
-        dest      = os.path.join(config.UPLOAD_FOLDER, safe_name)
+        dest_dir = Path(__file__).parent / "kbdocs"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = os.path.join(str(dest_dir), Path(f.filename).name)
         try:
             f.save(dest)
             file_size = os.path.getsize(dest)
@@ -504,7 +639,7 @@ def ingest():
     def _worker(sess_token):
         config.current_session.set(sess_token)
         for path, orig_name in saved_paths:
-            res = process_document_pipeline(path, orig_name, tier, token, delete_after=True)
+            res = process_document_pipeline(path, orig_name, tier, token, delete_after=False)
             res["file"] = orig_name
             _jobs[job_id]["results"].append(res)
             _jobs[job_id]["log"].extend(res["log"])
@@ -556,6 +691,7 @@ def query():
     """RAG query — returns a streaming SSE response."""
     data = request.get_json()
     q    = (data or {}).get("query", "").strip()
+    top_k = (data or {}).get("top_k")
     if not q:
         return jsonify({"error": "Empty query"}), 400
 
@@ -576,7 +712,7 @@ def query():
             try:
                 def cb(status):
                     q_events.put({"status": status})
-                ans, metrics = run_query_crew(q, session_token=token, status_callback=cb)
+                ans, metrics = run_query_crew(q, top_k=top_k, session_token=token, status_callback=cb)
                 q_events.put({"done": True, "answer": ans, "metrics": metrics})
             except Exception as e:
                 log.exception("Query pipeline error")
@@ -616,6 +752,7 @@ def query_v1():
     """Headless RAG query — synchronous JSON response."""
     data = request.get_json()
     q    = (data or {}).get("query", "").strip()
+    top_k = (data or {}).get("top_k")
     if not q:
         return jsonify({"error": "Empty query"}), 400
 
@@ -627,7 +764,7 @@ def query_v1():
     log.info("v1 Query received (%d chars) | session: %s", len(q), token)
     config.current_session.set(token)
     try:
-        ans, metrics = run_query_crew(q, session_token=token)
+        ans, metrics = run_query_crew(q, top_k=top_k, session_token=token)
         return jsonify({"answer": ans, "metrics": metrics})
     except Exception as e:
         log.exception("v1 Query pipeline error")
@@ -653,8 +790,9 @@ def ingest_v1_sync():
         if not _allowed(f.filename):
             rejected.append(f.filename)
             continue
-        safe_name = f"{uuid.uuid4().hex[:6]}_{Path(f.filename).name}"
-        dest = os.path.join(config.UPLOAD_FOLDER, safe_name)
+        dest_dir = Path(__file__).parent / "kbdocs"
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        dest = os.path.join(str(dest_dir), Path(f.filename).name)
         f.save(dest)
         saved_paths.append((dest, f.filename))
 
@@ -663,57 +801,43 @@ def ingest_v1_sync():
 
     config.current_session.set(token)
     results = []
-    
+
     for path, orig_name in saved_paths:
         try:
             docs = document_loader.load_document(path)
             chunks = chunker.chunk_documents(docs)
             if not chunks:
                 raise ValueError("No text extracted")
-            
+
             texts = [c["text"] for c in chunks]
             embeddings = embedder.embed_texts(texts)
-            
+
             doc_id = uuid.uuid4().hex[:8]
             added = vector_store.add_chunks(chunks, embeddings, doc_id, tier=tier, session_token=token)
-            
-            entities_stored = 0
+
+            # Entity extraction is fire-and-forget (non-blocking)
             if graph_store.is_available():
-                sample_text = "\n\n".join(d["text"] for d in docs[:3])[:3000]
-                from agents.llm import get_llm
-                llm = get_llm()
-                prompt = (
-                    "Extract key entities from the text below.\n"
-                    "Return a JSON array of objects with keys: name, type, relations.\n"
-                    "type must be a broad category like: Person, Organization, Location, Concept, Event, Document, Object, Rule.\n"
-                    "relations is a list of {target, rel} objects.\n"
-                    "Return ONLY the JSON array.\n\n"
-                    f"TEXT:\n{sample_text}\n\nJSON:"
-                )
-                raw = llm.call([{"role": "user", "content": prompt}])
-                start, end = raw.find("["), raw.rfind("]") + 1
-                if start != -1 and end > start:
-                    try:
-                        entities = json.loads(raw[start:end])
-                        graph_store.store_entities(entities, orig_name, tier=tier, session_token=token)
-                        entities_stored = len(entities)
-                    except Exception:
-                        pass
-            
+                threading.Thread(
+                    target=_extract_entities_async,
+                    args=(docs, orig_name, tier, token),
+                    daemon=True,
+                    name=f"entity-{orig_name[:20]}",
+                ).start()
+
             results.append({
-                "file": orig_name, 
-                "status": "success", 
+                "file": orig_name,
+                "status": "success",
                 "chunks_added": added,
-                "entities_added": entities_stored
+                "entities_queued": graph_store.is_available(),
             })
         except Exception as e:
             results.append({"file": orig_name, "status": "error", "error": str(e)})
         finally:
-            if os.path.exists(path):
-                os.remove(path)
-                
+            pass # delete_after is False for these sync uploads
+
     trigger_kv_cache_update(token)
     return jsonify({"results": results, "rejected": rejected})
+
 
 # ── LLM probe endpoints (used by default prompt buttons) ─────────────────────
 
@@ -726,7 +850,7 @@ def probe_gen():
             config.LLM_COMPLETIONS_URL,
             json={"prompt": "Hello, reply with one sentence.", "max_tokens": 64,
                   "temperature": 0.7, "top_p": 0.9},
-            timeout=30,
+            timeout=60,
         )
         r.raise_for_status()
         data = r.json()
@@ -745,7 +869,7 @@ def probe_embed():
         r = req.post(
             config.EMBED_EMBEDDINGS_URL,
             json={"input": "Document test sentence."},
-            timeout=30,
+            timeout=60,
         )
         r.raise_for_status()
         data = r.json()
@@ -763,10 +887,28 @@ def probe_embed():
 
 def start_auto_ingest_thread():
     def _auto_ingest_worker():
+        global _auto_ingest_status
         kbdocs_dir = Path(__file__).parent / "kbdocs"
-        if not kbdocs_dir.exists():
+        kbdocs_dir.mkdir(parents=True, exist_ok=True)
+        
+        hf_token = os.environ.get("HF_PRIVATE_TOKEN")
+        if hf_token:
+            import logging
+            from huggingface_hub import snapshot_download
+            try:
+                logging.info("HF_PRIVATE_TOKEN found, syncing dataset Sam-max1/he-data to %s...", kbdocs_dir)
+                snapshot_download(
+                    repo_id="Sam-max1/he-data",
+                    repo_type="dataset",
+                    local_dir=str(kbdocs_dir),
+                    token=hf_token
+                )
+                logging.info("Dataset synced successfully.")
+            except Exception as e:
+                logging.error("Failed to sync HuggingFace dataset: %s", e)
+        elif not kbdocs_dir.exists():
             return
-            
+
         import requests, time
         log.info("Auto-ingest: waiting for LLM services to boot...")
         # Wait up to 60s for models
@@ -781,6 +923,8 @@ def start_auto_ingest_thread():
             time.sleep(2)
         else:
             log.warning("Auto-ingest aborted: LLM services not online.")
+            _auto_ingest_status["error"] = "LLM services not online within 60s"
+            _auto_ingest_status["done"] = True
             return
 
         # Check existing documents to avoid re-ingesting
@@ -789,37 +933,63 @@ def start_auto_ingest_thread():
         for f in kbdocs_dir.iterdir():
             if f.is_file() and _allowed(f.name) and f.name not in existing:
                 files_to_ingest.append(f)
-                
+
         if not files_to_ingest:
             log.info("Auto-ingest: no new files found in kbdocs.")
+            _auto_ingest_status["done"] = True
             return
-            
+
         log.info("Auto-ingesting %d files from kbdocs...", len(files_to_ingest))
         config.current_session.set("admin")
-        
+
+        _auto_ingest_status["running"] = True
+        _auto_ingest_status["total"] = len(files_to_ingest)
+        _auto_ingest_status["completed"] = 0
+        _auto_ingest_status["results"] = []
+        _auto_ingest_status["done"] = False
+
         for path in files_to_ingest:
+            _auto_ingest_status["current_file"] = path.name
             res = process_document_pipeline(str(path), path.name, tier="foundation", token="admin", delete_after=False)
+            _auto_ingest_status["completed"] += 1
+            _auto_ingest_status["results"].append({
+                "file": path.name,
+                "ok": res["ok"],
+                "result": res["result"],
+            })
             if res["ok"]:
                 log.info("Auto-ingest successful for %s", path.name)
             else:
                 log.error("Auto-ingest failed for %s: %s", path.name, res["result"])
-                
+
+        _auto_ingest_status["running"] = False
+        _auto_ingest_status["done"] = True
+        _auto_ingest_status["current_file"] = None
         trigger_kv_cache_update("admin")
-        
+
     threading.Thread(target=_auto_ingest_worker, daemon=True).start()
+
+
+@app.route("/api/auto-ingest/status")
+def auto_ingest_status():
+    """Return real-time progress of the background kbdocs auto-ingestion."""
+    return jsonify(_auto_ingest_status)
 
 
 if __name__ == "__main__":
     mode_label  = "HF / CPU" if config.HF_MODE else "GPU / Desktop"
     admin_label = "ENABLED" if config.ADMIN_MODE else "DISABLED (public mode)"
+    run_port  = int(os.environ.get("PORT", 5050))
+    ui_url = f"http://127.0.0.1:{run_port}" if not config.HF_MODE else "<HF Spaces URL>"
     print("=" * 64)
     print("  HealthExpert — Document AI Expert")
+    print(f"  UI         : {ui_url}")
     print(f"  Mode       : {mode_label}")
     print(f"  Admin      : {admin_label}")
     print(f"  Gen LLM    : {config.LLM_COMPLETIONS_URL}  [{config.LLM_MODEL_ID}]")
     print(f"  Embed LLM  : {config.EMBED_EMBEDDINGS_URL}  [{config.EMBEDDING_MODEL}]")
     print(f"  ChromaDB   : {config.CHROMA_PERSIST_DIR}  (embedded)")
-    print(f"  Neo4j      : {'DISABLED (HF mode)' if config.HF_MODE else config.NEO4J_URI}")
+    print(f"  Kuzu DB    : {config.KUZU_DB_PATH}  (embedded)")
     print(f"  KV Cache   : {'DISABLED (HF mode)' if not config.KV_CACHE_ENABLED else 'ENABLED'}")
     print("=" * 64)
     
@@ -828,7 +998,6 @@ if __name__ == "__main__":
     
     cert_path = str(Path(__file__).parent / "cert.pem")
     key_path  = str(Path(__file__).parent / "key.pem")
-    run_port  = int(os.environ.get("PORT", 5050))
     
     start_auto_ingest_thread()
     

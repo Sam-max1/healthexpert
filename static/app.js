@@ -10,6 +10,36 @@ const diag = {
   groupEnd: () => console.groupEnd(),
 };
 
+// ── Device detection ──────────────────────────────────────────────────────────
+// Applies `body.is-mobile` when the device is a phone/touch device OR the
+// viewport is narrower than 768px.  Re-evaluated on every resize so the layout
+// adapts when the window is resized (e.g. DevTools responsive mode).
+const MOBILE_BREAKPOINT = 768;
+
+function detectDevice() {
+  const isTouchDevice  = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  const isNarrow       = window.innerWidth <= MOBILE_BREAKPOINT;
+  const isMobileUA     = /Mobi|Android|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+  const isMobile       = isTouchDevice || isNarrow || isMobileUA;
+
+  if (isMobile) {
+    document.body.classList.add('is-mobile');
+  } else {
+    document.body.classList.remove('is-mobile');
+  }
+  diag.info(`Device detected — mobile: ${isMobile} (touch:${isTouchDevice}, narrow:${isNarrow}, mobileUA:${isMobileUA})`);
+  return isMobile;
+}
+
+// Run immediately so the correct class is present before first paint
+detectDevice();
+// Re-run on resize (debounced to avoid excessive calls)
+let _resizeTimer = null;
+window.addEventListener('resize', () => {
+  clearTimeout(_resizeTimer);
+  _resizeTimer = setTimeout(detectDevice, 150);
+});
+
 // ── State ──────────────────────────────────────────────────────────────────────
 const state = {
   isQuerying:   false,
@@ -95,7 +125,7 @@ async function refreshStatus() {
     if (adminControls) adminControls.style.display = showAdmin ? 'flex' : 'none';
 
     setPill('status-vector', vecOk,   `Vector · ${d.vector_db?.chunks ?? '?'} chunks`);
-    setPill('status-graph',  graphOk, graphOk ? `Graph · ${d.graph_db.nodes} nodes, ${d.graph_db.relationships} edges` : 'Graph · offline');
+    setPill('status-graph',  graphOk, graphOk ? `Kuzu DB · ${d.graph_db.nodes} nodes, ${d.graph_db.relationships} edges` : 'Kuzu DB · offline');
     
     const genStatus = genOk 
         ? `Gen · ${(d.gen_llm?.model || '').split('/').pop()} (GPU: ${d.gen_llm?.gpu_id} | KV: ${d.gen_llm?.kv_cache_length} tkns)` 
@@ -143,7 +173,7 @@ async function dockerAction(action) {
 }
 
 async function adminPurge() {
-  if (!confirm("Are you sure you want to completely wipe Weaviate and Neo4j? This cannot be undone.")) return;
+  if (!confirm("Are you sure you want to completely wipe ChromaDB and Kuzu? This cannot be undone.")) return;
   diag.info('Purge DB action');
   try {
     const r = await fetch(`/api/admin/purge`, { method: 'POST' });
@@ -238,6 +268,17 @@ async function pollSysInfo() {
       const isHf = d.hf_mode || (window.APP_CONFIG && window.APP_CONFIG.hfMode);
       badge.textContent  = isHf ? '⚡ HF / CPU Mode' : '🖥 GPU Mode';
       badge.className    = 'res-mode-badge ' + (isHf ? 'hf-mode' : 'gpu-mode');
+    }
+
+    // Graph Extraction Active
+    const activeGraph = $('status-graph-active');
+    const dbGraph = $('status-graph');
+    if (d.active_graph_tasks > 0) {
+      if (activeGraph) activeGraph.style.display = 'flex';
+      if (dbGraph) dbGraph.style.display = 'none';
+    } else {
+      if (activeGraph) activeGraph.style.display = 'none';
+      if (dbGraph) dbGraph.style.display = 'flex';
     }
   } catch(err) {
     diag.warn('pollSysInfo failed:', err);
@@ -650,14 +691,29 @@ function addThinkingMsg(qId) {
     <div>
       <div class="chat-bubble">
         <div class="milestone-graph" id="milestone-graph-${qId}">
-          <div class="milestone" id="ms-inference-${qId}">
+          <div class="milestone" id="ms-graph-${qId}">
             <div class="milestone-dot"></div>
-            <span>Retrieval <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <span>GraphDB <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+          </div>
+          <div class="milestone-line"></div>
+          <div class="milestone" id="ms-vector-${qId}">
+            <div class="milestone-dot"></div>
+            <span>Vector DB <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+          </div>
+          <div class="milestone-line"></div>
+          <div class="milestone" id="ms-bm25-${qId}">
+            <div class="milestone-dot"></div>
+            <span>BM25 Search <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+          </div>
+          <div class="milestone-line"></div>
+          <div class="milestone" id="ms-ranking-${qId}">
+            <div class="milestone-dot"></div>
+            <span>LLM Ranking <span class="milestone-timer" data-time="0">(0.0s)</span></span>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-analysis-${qId}">
             <div class="milestone-dot"></div>
-            <span>Analysis <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <span>LLM Analysis <span class="milestone-timer" data-time="0">(0.0s)</span></span>
           </div>
         </div>
       </div>
@@ -679,6 +735,12 @@ async function submitQuery() {
   diag.group('Query');
   diag.info('Query:', q);
   addChatMsg(q, 'user');
+
+  // On mobile, scroll the chat panel into view so the user sees the response
+  if (document.body.classList.contains('is-mobile')) {
+    const chatPanel = document.getElementById('chat-panel');
+    if (chatPanel) chatPanel.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
   const qId = Date.now();
   const thinkingEl = addThinkingMsg(qId);
 
@@ -722,11 +784,12 @@ async function submitQuery() {
   }
 
   try {
-    diag.info('POST /api/query');
+    const topK = parseInt($('top-k-select')?.value || 5, 10);
+    diag.info('POST /api/query', { query: q, top_k: topK });
     const resp = await fetch('/api/query', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query: q }),
+      body:    JSON.stringify({ query: q, top_k: topK }),
     });
 
     if (!resp.ok) {
@@ -753,32 +816,50 @@ async function submitQuery() {
 
         if (payload.error) throw new Error(payload.error);
 
-        // ── Phase status updates → milestone graph ──────────────────
         if (payload.status) {
           diag.info('SSE status:', payload.status);
-          const msRetrieval = $(`ms-inference-${qId}`);
+          const msGraph     = $(`ms-graph-${qId}`);
+          const msVector    = $(`ms-vector-${qId}`);
+          const msBm25      = $(`ms-bm25-${qId}`);
+          const msRanking   = $(`ms-ranking-${qId}`);
           const msAnalysis  = $(`ms-analysis-${qId}`);
-          if (!msRetrieval || !msAnalysis) continue;
+          if (!msGraph || !msAnalysis) continue;
 
           // Mark previous executing dot as complete before starting next
-          [msRetrieval, msAnalysis].forEach(el => {
+          [msGraph, msVector, msBm25, msRanking, msAnalysis].forEach(el => {
+            if (!el) return;
             const dot = el.querySelector('.milestone-dot');
             if (dot && dot.className.includes('executing')) {
               dot.className = 'milestone-dot complete';
             }
           });
 
-          if (payload.status === 'inference') {
-            // Phase 1: Retrieval (vector + graph search)
-            msRetrieval.querySelector('.milestone-dot').className = 'milestone-dot executing';
-            startTimer(`ms-inference-${qId}`);
-          } else if (payload.status === 'gatekeeping') {
-            // Phase 2: Gatekeeper is now instant (pure Python) — mark retrieval done
+          if (payload.status === 'graph') {
+            msGraph.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-graph-${qId}`);
+          } else if (payload.status === 'inference' || payload.status === 'vector') {
             stopTimer();
-            msRetrieval.querySelector('.milestone-dot').className = 'milestone-dot complete';
+            if(msGraph) msGraph.querySelector('.milestone-dot').className = 'milestone-dot complete';
+            if(msVector) msVector.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-vector-${qId}`);
+          } else if (payload.status === 'bm25') {
+            stopTimer();
+            if(msVector) msVector.querySelector('.milestone-dot').className = 'milestone-dot complete';
+            if(msBm25) msBm25.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-bm25-${qId}`);
+          } else if (payload.status === 'reranking') {
+            stopTimer();
+            if(msBm25) msBm25.querySelector('.milestone-dot').className = 'milestone-dot complete';
+            if(msRanking) msRanking.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            startTimer(`ms-ranking-${qId}`);
+          } else if (payload.status === 'gatekeeping') {
+            // Gatekeeper is instant
+            stopTimer();
+            if(msRanking) msRanking.querySelector('.milestone-dot').className = 'milestone-dot complete';
           } else if (payload.status === 'analysis') {
-            // Phase 3: LLM synthesis
-            msAnalysis.querySelector('.milestone-dot').className = 'milestone-dot executing';
+            stopTimer();
+            if(msRanking) msRanking.querySelector('.milestone-dot').className = 'milestone-dot complete';
+            if(msAnalysis) msAnalysis.querySelector('.milestone-dot').className = 'milestone-dot executing';
             startTimer(`ms-analysis-${qId}`);
           }
         }
@@ -815,17 +896,22 @@ async function submitQuery() {
 
     diag.info(`Query complete — ${chunkCount} SSE chunks, ${fullText.length} chars`);
     stopTimer();
-    // Ensure both milestone dots are marked complete
-    [$(`ms-inference-${qId}`), $(`ms-analysis-${qId}`)].forEach(el => {
+    // Ensure all milestone dots are marked complete
+    [$(`ms-inference-${qId}`), $(`ms-kuzu-${qId}`), $(`ms-analysis-${qId}`)].forEach(el => {
       if (!el) return;
       const dot = el.querySelector('.milestone-dot');
       if (dot && !dot.className.includes('failed')) dot.className = 'milestone-dot complete';
     });
-    addChatMsg('Answer generated — see the Output panel →', 'assistant');
-    extractAndShowCitations(fullText);
+    addChatMsg('Answer generated — see the Output panel ↓', 'assistant');
     copyBtn.style.display = 'block';
     state.lastAnswer = fullText;
     notify('Answer ready!', 'success', 2500);
+
+    // On mobile, scroll to output panel after answer is ready
+    if (document.body.classList.contains('is-mobile')) {
+      const outputPanel = document.getElementById('output-panel');
+      if (outputPanel) setTimeout(() => outputPanel.scrollIntoView({ behavior: 'smooth', block: 'start' }), 300);
+    }
 
   } catch(err) {
     diag.error('Query error:', err);
@@ -891,13 +977,100 @@ function escHtml(s) {
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// ── Auto-ingest background progress banner ─────────────────────────────────────
+
+const autoIngestBanner = $('auto-ingest-banner');
+const autoIngestBar    = $('auto-ingest-bar');
+const autoIngestLabel  = $('auto-ingest-label');
+const autoIngestSub    = $('auto-ingest-sub');
+const autoIngestCount  = $('auto-ingest-count');
+
+let _autoIngestPollTimer    = null;
+let _autoIngestDoneNotified = false;
+
+async function pollAutoIngestStatus() {
+  try {
+    const r = await fetch('/api/auto-ingest/status');
+    if (!r.ok) return;
+    const d = await r.json();
+
+    const isActive = d.running || (d.total > 0 && !d.done);
+    const isDone   = d.done && d.total > 0;
+
+    if (isActive) {
+      // Show and update banner
+      if (autoIngestBanner) {
+        autoIngestBanner.style.display = 'block';
+        document.body.classList.add('ingest-banner-visible');
+      }
+      const pct = d.total > 0 ? Math.round((d.completed / d.total) * 100) : 5;
+      if (autoIngestBar)   autoIngestBar.style.width = pct + '%';
+      if (autoIngestLabel) autoIngestLabel.textContent = 'Indexing knowledge base…';
+      if (autoIngestSub)   autoIngestSub.textContent   = d.current_file ? `Processing: ${d.current_file}` : 'Preparing…';
+      if (autoIngestCount) autoIngestCount.textContent = `${d.completed} / ${d.total}`;
+
+    } else if (isDone && !_autoIngestDoneNotified) {
+      // Show completion state briefly then hide
+      _autoIngestDoneNotified = true;
+      if (autoIngestBanner) autoIngestBanner.style.display = 'block';
+      if (autoIngestBar)    autoIngestBar.style.width = '100%';
+
+      const ok  = (d.results || []).filter(x => x.ok).length;
+      const bad = (d.results || []).filter(x => !x.ok).length;
+
+      if (autoIngestLabel) autoIngestLabel.textContent = `Knowledge base ready — ${ok} file${ok !== 1 ? 's' : ''} indexed`;
+      if (autoIngestSub)   autoIngestSub.textContent   = bad > 0 ? `⚠️ ${bad} file(s) failed` : '✓ All files ingested successfully';
+      if (autoIngestCount) autoIngestCount.textContent = `${ok} / ${d.total}`;
+
+      if (ok > 0)  notify(`Auto-ingest complete: ${ok} knowledge base file${ok !== 1 ? 's' : ''} indexed`, 'success', 6000);
+      if (bad > 0) notify(`Auto-ingest: ${bad} file(s) failed to ingest`, 'warn', 8000);
+
+      // Refresh document list to show newly ingested docs
+      await loadDocuments();
+      await refreshStatus();
+
+      // Fade out banner after 4 seconds
+      setTimeout(() => {
+        if (autoIngestBanner) autoIngestBanner.style.display = 'none';
+        document.body.classList.remove('ingest-banner-visible');
+      }, 4000);
+
+      // Stop polling
+      if (_autoIngestPollTimer) clearInterval(_autoIngestPollTimer);
+      _autoIngestPollTimer = null;
+      return;
+
+    } else if (d.error && !_autoIngestDoneNotified) {
+      _autoIngestDoneNotified = true;
+      notify(`Auto-ingest error: ${d.error}`, 'error', 8000);
+      if (_autoIngestPollTimer) clearInterval(_autoIngestPollTimer);
+      _autoIngestPollTimer = null;
+      return;
+
+    } else {
+      // Not started yet or no files — keep banner hidden
+      if (autoIngestBanner) autoIngestBanner.style.display = 'none';
+      document.body.classList.remove('ingest-banner-visible');
+    }
+
+  } catch (err) {
+    diag.warn('pollAutoIngestStatus error:', err);
+  }
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 (async () => {
   diag.info('App initialising…');
   await refreshStatus();
   await loadDocuments();
-  await pollSysInfo();          // Initial resource banner population
+  await pollSysInfo();           // Initial resource banner population
+  await pollAutoIngestStatus();  // Check if auto-ingest is already running
+
   setInterval(refreshStatus, 30_000);
   setInterval(pollSysInfo,   10_000);  // Update resource banner every 10 s
+
+  // Poll auto-ingest every 2 s (self-cancels when done)
+  _autoIngestPollTimer = setInterval(pollAutoIngestStatus, 2000);
+
   diag.info('App ready.');
 })();
