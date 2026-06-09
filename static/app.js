@@ -925,8 +925,9 @@ async function submitQuery() {
           const carbonStr = m.carbon_kg < 0.001 ? '< 1g' : (m.carbon_kg * 1000).toFixed(2) + 'g';
           renderMetricsBanner(m.tokens_in, m.tokens_out, timeStr, carbonStr);
           
-          if (msAnalysis) {
-            const tokDiv = msAnalysis.querySelector('.milestone-tokens');
+          const localMsAnalysis = document.getElementById(`ms-analysis-${qId}`);
+          if (localMsAnalysis) {
+            const tokDiv = localMsAnalysis.querySelector('.milestone-tokens');
             if (tokDiv) {
               tokDiv.innerText = `In: ${m.tokens_in} | Out: ${m.tokens_out}`;
             }
