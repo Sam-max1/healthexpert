@@ -15,6 +15,7 @@ env/
 # Data and Models
 data/
 uploads/
+kbdocs/
 models/
 hub/
 offload/

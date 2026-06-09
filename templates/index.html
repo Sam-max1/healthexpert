@@ -2,9 +2,13 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <meta name="theme-color" content="#F9F7F3"/>
+  <meta name="color-scheme" content="light"/>
+  <meta name="apple-mobile-web-app-capable" content="yes"/>
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
   <title>Healthcare Policy Expert</title>
-  <meta name="description" content="AI-powered healthcare policy analysis using RAG with Vector and Graph databases."/>
+  <meta name="description" content="AI-powered healthcare policy analysis using RAG with Vector and Graph databases. Accessible and mobile-friendly interface."/>
   <link rel="preconnect" href="https://fonts.googleapis.com"/>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap"/>
   <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -17,91 +21,148 @@
     };
   </script>
 </head>
-<body>
+<body role="application" aria-label="Healthcare Policy Expert Application">
+
+<!-- Skip to main content link for keyboard navigation -->
+<a href="#workspace" class="skip-link">Skip to main content</a>
 
 <!-- ── Header ──────────────────────────────────────────────────────────────── -->
-<header id="app-header">
+<header id="app-header" role="banner" aria-label="Application header">
   <div class="logo">
-    <div class="logo-icon">🏥</div>
+    <div class="logo-icon" aria-hidden="false" title="Healthcare Policy Expert">🏥</div>
     <div class="logo-text">
-      <h1>Healthcare Policy Expert <span id="admin-badge" style="display:none; font-size:12px; background:var(--blue); padding:2px 6px; border-radius:4px; color:#fff;">ADMIN</span></h1>
-      <span>Powered by RAG · Vector DB · Knowledge Graph · CrewAI</span>
+      <h1>Healthcare Policy Expert <span id="admin-badge" style="display:none; font-size:12px; background:var(--blue); padding:2px 6px; border-radius:4px; color:#fff;" aria-label="Administrator mode">ADMIN</span></h1>
+      <span id="logo-subtitle">Powered by RAG · Vector DB · Knowledge Graph · CrewAI</span>
     </div>
   </div>
-  <div id="status-bar">
-    <div class="status-pill" id="status-vector">
-      <div class="status-dot"></div>
+  <div id="status-bar" aria-label="System status indicators" role="region">
+    <div class="status-pill" id="status-vector" role="status" aria-label="Vector database status">
+      <div class="status-dot" aria-hidden="true"></div>
       <span class="status-label">Vector DB</span>
     </div>
-    <div class="status-pill" id="status-graph">
-      <div class="status-dot"></div>
+    <div class="status-pill" id="status-graph" role="status" aria-label="Graph database status">
+      <div class="status-dot" aria-hidden="true"></div>
       <span class="status-label">Graph DB</span>
     </div>
-    <div class="status-pill" id="status-gen">
-      <div class="status-dot"></div>
+    <div class="status-pill" id="status-graph-active" role="status" aria-label="Graph extraction active" style="display:none; background: var(--blue); border-color: var(--blue); color: #fff;">
+      <div class="status-dot" aria-hidden="true" style="background:#fff; animation: pulse 1.5s infinite;"></div>
+      <span class="status-label">Graph Ingestion</span>
+    </div>
+    <div class="status-pill" id="status-gen" role="status" aria-label="Generation LLM status">
+      <div class="status-dot" aria-hidden="true"></div>
       <span class="status-label">Gen LLM</span>
     </div>
-    <div class="status-pill" id="status-embed">
-      <div class="status-dot"></div>
+    <div class="status-pill" id="status-embed" role="status" aria-label="Embedding LLM status">
+      <div class="status-dot" aria-hidden="true"></div>
       <span class="status-label">Embed LLM</span>
     </div>
     <!-- Admin controls -->
-    <div id="admin-controls" style="display:none; gap:8px; align-items:center;">
-      <button class="docker-btn" id="db-up-btn" data-tooltip="Start Databases">▶ DB Up</button>
-      <button class="docker-btn warn" id="db-down-btn" data-tooltip="Stop Databases">■ DB Down</button>
-      <button class="docker-btn danger" id="db-purge-btn" data-tooltip="Wipe all data">⚠ Purge DB</button>
-      <button class="docker-btn danger" id="app-kill-btn" data-tooltip="Kill application" style="background:#e53e3e">☠ Kill Switch</button>
+    <div id="admin-controls" style="display:none; gap:8px; align-items:center;" role="group" aria-label="Administrator controls">
+      <button class="docker-btn" id="db-up-btn" data-tooltip="Start Databases" aria-label="Start databases">▶ DB Up</button>
+      <button class="docker-btn warn" id="db-down-btn" data-tooltip="Stop Databases" aria-label="Stop databases">■ DB Down</button>
+      <button class="docker-btn danger" id="db-purge-btn" data-tooltip="Wipe all data" aria-label="Purge all database">⚠ Purge DB</button>
+      <button class="docker-btn danger" id="app-kill-btn" data-tooltip="Kill application" aria-label="Shutdown application" style="background:#e53e3e">☠ Kill Switch</button>
     </div>
   </div>
 </header>
 
 <!-- ── Resource Monitor Banner ─────────────────────────────────────────────── -->
-<div id="resource-banner">
+<div id="resource-banner" role="region" aria-label="System resource usage">
   <div id="resource-banner-inner">
-    <span class="res-label">&#127760; System</span>
-    <div class="res-item" id="res-cpu" data-tooltip="CPU utilisation">
-      <span class="res-icon">&#9881;&#65039;</span>
+    <span class="res-label" aria-label="System metrics">&#127760; System</span>
+    <div class="res-item" id="res-cpu" data-tooltip="CPU utilisation" role="status" aria-label="CPU usage">
+      <span class="res-icon" aria-hidden="true">&#9881;&#65039;</span>
       <span id="res-cpu-label">CPU: —</span>
-      <span class="res-bar-wrap"><span class="res-bar" id="res-cpu-bar"></span></span>
+      <span class="res-bar-wrap" aria-hidden="true"><span class="res-bar" id="res-cpu-bar"></span></span>
       <span class="res-pct" id="res-cpu-pct">--%</span>
     </div>
-    <div class="res-divider"></div>
-    <div class="res-item" id="res-ram" data-tooltip="RAM usage">
-      <span class="res-icon">&#128190;</span>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-ram" data-tooltip="RAM usage" role="status" aria-label="RAM usage">
+      <span class="res-icon" aria-hidden="true">&#128190;</span>
       <span id="res-ram-label">RAM: —</span>
-      <span class="res-bar-wrap"><span class="res-bar" id="res-ram-bar"></span></span>
+      <span class="res-bar-wrap" aria-hidden="true"><span class="res-bar" id="res-ram-bar"></span></span>
       <span class="res-pct" id="res-ram-pct">--%</span>
     </div>
-    <div class="res-divider"></div>
-    <div class="res-item" id="res-disk" data-tooltip="Disk free space">
-      <span class="res-icon">&#128190;</span>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-disk" data-tooltip="Disk free space" role="status" aria-label="Disk usage">
+      <span class="res-icon" aria-hidden="true">&#128190;</span>
       <span id="res-disk-label">Disk: —</span>
-      <span class="res-bar-wrap"><span class="res-bar" id="res-disk-bar"></span></span>
+      <span class="res-bar-wrap" aria-hidden="true"><span class="res-bar" id="res-disk-bar"></span></span>
       <span class="res-pct" id="res-disk-pct">--%</span>
     </div>
-    <div class="res-divider"></div>
-    <span class="res-mode-badge" id="res-mode-badge"></span>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-topk" data-tooltip="Chunks to retrieve" role="status" aria-label="Retrieve Chunks">
+      <label for="top-k-select" style="font-size: 11px; margin-right: 4px; color: var(--text-muted);">Retrieve Chunks:</label>
+      <select id="top-k-select" aria-label="Number of chunks to retrieve" style="background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font-size: 11px; outline: none; cursor: pointer;">
+        <option value="5" selected>5</option>
+        <option value="10">10</option>
+        <option value="15">15</option>
+        <option value="20">20</option>
+        <option value="25">25</option>
+      </select>
+    </div>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-maxtokens" data-tooltip="Output context limit (tokens)" role="status" aria-label="Output Context">
+      <label for="max-tokens-select" style="font-size: 11px; margin-right: 4px; color: var(--text-muted);">Output Context:</label>
+      <select id="max-tokens-select" aria-label="Max output tokens" style="background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font-size: 11px; outline: none; cursor: pointer;">
+        <option value="512">512</option>
+        <option value="1024" selected>1024</option>
+        <option value="1536">1536</option>
+        <option value="2048">2048</option>
+      </select>
+    </div>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-sources" data-tooltip="Select Retrieval Sources" role="status" aria-label="Retrieval Sources">
+      <label style="font-size: 11px; margin-right: 4px; color: var(--text-muted);">Sources:</label>
+      <label style="font-size: 11px; cursor: pointer; margin-right: 6px; display: flex; align-items: center; gap: 3px;">
+        <input type="checkbox" id="chk-vector" checked> Vector
+      </label>
+      <label style="font-size: 11px; cursor: pointer; margin-right: 6px; display: flex; align-items: center; gap: 3px;">
+        <input type="checkbox" id="chk-graph" checked> Graph
+      </label>
+      <label style="font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 3px;">
+        <input type="checkbox" id="chk-bm25" checked> BM25
+      </label>
+    </div>
+    <div class="res-divider" aria-hidden="true"></div>
+    <span class="res-mode-badge" id="res-mode-badge" role="status"></span>
+  </div>
+</div>
+
+
+<!-- ── Auto-ingest progress banner ──────────────────────────────────────── -->
+<div id="auto-ingest-banner" style="display:none" role="status" aria-label="Background document ingestion progress" aria-live="polite">
+  <div id="auto-ingest-banner-inner">
+    <span class="auto-ingest-icon" aria-hidden="true">⚙️</span>
+    <div class="auto-ingest-text">
+      <span id="auto-ingest-label">Indexing knowledge base…</span>
+      <span id="auto-ingest-sub" class="auto-ingest-sub">Preparing…</span>
+    </div>
+    <div class="auto-ingest-progress-wrap">
+      <div class="auto-ingest-progress-bar" id="auto-ingest-bar"></div>
+    </div>
+    <span id="auto-ingest-count" class="auto-ingest-count">0 / 0</span>
   </div>
 </div>
 
 <!-- ── Three-panel workspace ───────────────────────────────────────────────── -->
-<main id="workspace">
+<main id="workspace" role="main" aria-label="Application workspace">
 
   <!-- ── LEFT: Document Ingestion ─────────────────────────────────────────── -->
-  <section class="panel" id="ingest-panel" aria-label="Document Ingestion">
+  <section class="panel" id="ingest-panel" aria-label="Document Ingestion Panel">
     <div class="panel-header">
       <div class="panel-title">📂 Document Ingestion</div>
       <div class="panel-subtitle">Upload healthcare policy documents</div>
     </div>
-    <div class="panel-body">
+    <div class="panel-body" role="region" aria-label="Document upload and management area">
 
       <!-- Drop zone -->
-      <div id="drop-zone" role="button" tabindex="0" aria-label="Upload files">
-        <div class="drop-icon">⬆️</div>
+      <div id="drop-zone" role="button" tabindex="0" aria-label="Upload files - drag and drop area or click to browse" aria-describedby="drop-zone-desc">
+        <div class="drop-icon" aria-hidden="true">⬆️</div>
         <div class="drop-text">
           <strong>Drop files here</strong> or click to browse
         </div>
-        <div class="file-types" style="margin-top:10px">
+        <div id="drop-zone-desc" class="file-types" style="margin-top:10px">
           <span class="ft-badge ft-pdf">PDF</span>
           <span class="ft-badge ft-docx">DOCX</span>
           <span class="ft-badge ft-txt">TXT</span>
@@ -110,63 +171,63 @@
           <span class="ft-badge ft-img">IMG</span>
         </div>
       </div>
-      <input type="file" id="file-input" multiple
+      <input type="file" id="file-input" multiple aria-label="Select files to upload"
              accept=".txt,.pdf,.docx,.xlsx,.csv,.png,.jpg,.jpeg,.webp"/>
 
       <!-- Progress -->
-      <div id="ingest-progress">
-        <div class="progress-bar-wrap">
+      <div id="ingest-progress" role="region" aria-label="Document ingestion progress" aria-live="polite">
+        <div class="progress-bar-wrap" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
           <div class="progress-bar-fill" id="progress-fill"></div>
         </div>
         <div id="ingest-status-text">Preparing…</div>
         <!-- Diagnostic log accordion -->
         <details id="ingest-log-details" style="margin-top:8px">
           <summary class="log-summary">📋 Diagnostic log</summary>
-          <div id="ingest-log" class="ingest-log-box"></div>
+          <div id="ingest-log" class="ingest-log-box" role="log" aria-label="Ingestion diagnostic log"></div>
         </details>
       </div>
 
-      <hr class="divider"/>
+      <hr class="divider" aria-hidden="true"/>
 
       <!-- Document list (Knowledge Base) -->
       <div class="kb-header-row">
         <div class="kb-label">Knowledge Base</div>
-        <button id="refresh-docs-btn" class="icon-btn" data-tooltip="Refresh document list">⟳</button>
+        <button id="refresh-docs-btn" class="icon-btn" data-tooltip="Refresh document list" aria-label="Refresh document list">⟳</button>
       </div>
-      <div id="doc-list"></div>
+      <div id="doc-list" role="list" aria-label="Uploaded documents list"></div>
     </div>
   </section>
 
   <!-- ── CENTER: Inference / Chat ─────────────────────────────────────────── -->
-  <section class="panel" id="chat-panel" aria-label="Query Interface">
+  <section class="panel" id="chat-panel" aria-label="Query Interface Panel">
     <div class="panel-header">
       <div class="panel-title">💬 Policy Query</div>
       <div class="panel-subtitle">Ask questions about ingested documents</div>
     </div>
-    <div class="panel-body" id="chat-history-wrap" style="display:flex;flex-direction:column;gap:16px;">
-      <div id="chat-history">
+    <div class="panel-body" id="chat-history-wrap" style="display:flex;flex-direction:column;gap:16px;" role="region" aria-label="Chat history and conversation area">
+      <div id="chat-history" role="log" aria-label="Chat messages" aria-live="polite">
         <!-- Welcome message -->
-        <div class="chat-msg assistant">
-          <div class="chat-avatar">🏥</div>
+        <div class="chat-msg assistant" role="article">
+          <div class="chat-avatar" aria-hidden="true">🏥</div>
           <div>
             <div class="chat-bubble">
-              <strong>Welcome to Healthcare Policy Expert</strong><br/>
-              Upload policy documents on the left, then ask me anything about coverage,
-              regulations, treatments, or benefits. I'll retrieve answers from your
-              documents using hybrid semantic + graph search.
+              <strong>Welcome to Healthcare Policy Expert (NITDAA Base Insurance FAQ - 2026)</strong><br/><br/>
+              Ask me anything about policy, coverage, treatments, or benefits. I'll retrieve answers from FAQ documents using hybrid semantic + graph search. You may upload you own policy document for comparison or additional context (optional). You can search cashless network hospitals as well for all over India.
+              <br/><br/>
+              <span style="font-size:11px; color:var(--text-muted);">📱 On mobile, scroll down to see all panels.</span>
             </div>
           </div>
         </div>
       </div>
     </div>
-    <div id="query-footer">
+    <div id="query-footer" role="region" aria-label="Query input area">
       <!-- Default prompt test buttons -->
       <div id="prompt-presets" style="margin-bottom: 8px; flex-wrap: wrap;">
-        <button class="preset-btn" id="preset-gen"
+        <button class="preset-btn" id="preset-gen" aria-label="Test generation LLM server"
                 data-tooltip="Send a test prompt to the Gen LLM server (port 8002)">
           🧠 Test Gen LLM
         </button>
-        <button class="preset-btn" id="preset-embed"
+        <button class="preset-btn" id="preset-embed" aria-label="Test embedding LLM server"
                 data-tooltip="Send a test sentence to the Embed LLM server (port 8003)">
           🔢 Test Embed LLM
         </button>
@@ -179,9 +240,9 @@
       <form id="query-form" onsubmit="return false">
         <textarea
           id="query-input"
-          placeholder="Ask about policies, coverage, regulations… (Enter to send, Shift+Enter for newline)"
+          placeholder="Ask about policies, coverage or regulations…"
           rows="1"
-          aria-label="Query input"
+          aria-label="Query input field"
         ></textarea>
         <button id="send-btn" type="submit" aria-label="Send query">➤</button>
       </form>
@@ -189,25 +250,25 @@
   </section>
 
   <!-- ── RIGHT: Output / Answer ───────────────────────────────────────────── -->
-  <section class="panel" id="output-panel" aria-label="Answer Output">
+  <section class="panel" id="output-panel" aria-label="Analysis Output Panel">
     <div class="panel-header">
       <div class="panel-title">📋 Analysis Output</div>
       <div class="panel-subtitle">AI-generated response with citations</div>
     </div>
-    <div class="panel-body">
+    <div class="panel-body" role="region" aria-label="AI response and analysis output">
       <!-- Metrics banner — pinned at top, populated once server sends metrics event -->
-      <div id="metrics-banner" style="display:none;"></div>
-      <div id="output-container">
+      <div id="metrics-banner" style="display:none;" role="status" aria-label="Inference metrics"></div>
+      <div id="output-container" role="article">
         <div class="output-placeholder">
-          <div class="ph-icon">🔍</div>
+          <div class="ph-icon" aria-hidden="true">🔍</div>
           <div>
             Your analysis will appear here.<br/>
             Responses are formatted in Markdown with source citations.
           </div>
         </div>
       </div>
-      <div id="citations-block" style="margin-top:12px"></div>
-      <button id="copy-btn">⎘ Copy Response</button>
+      <div id="citations-block" style="margin-top:12px" role="region" aria-label="Source citations"></div>
+      <button id="copy-btn" aria-label="Copy response to clipboard">⎘ Copy Response</button>
     </div>
   </section>
 

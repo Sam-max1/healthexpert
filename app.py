@@ -692,6 +692,10 @@ def query():
     data = request.get_json()
     q    = (data or {}).get("query", "").strip()
     top_k = (data or {}).get("top_k")
+    max_tokens = (data or {}).get("max_tokens")
+    use_vector = (data or {}).get("use_vector", True)
+    use_graph = (data or {}).get("use_graph", True)
+    use_bm25 = (data or {}).get("use_bm25", True)
     if not q:
         return jsonify({"error": "Empty query"}), 400
 
@@ -711,8 +715,11 @@ def query():
             config.current_session.set(sess_token)
             try:
                 def cb(status):
-                    q_events.put({"status": status})
-                ans, metrics = run_query_crew(q, top_k=top_k, session_token=token, status_callback=cb)
+                    if isinstance(status, dict):
+                        q_events.put(status)
+                    else:
+                        q_events.put({"status": status})
+                ans, metrics = run_query_crew(q, top_k=top_k, max_tokens=max_tokens, use_vector=use_vector, use_graph=use_graph, use_bm25=use_bm25, session_token=token, status_callback=cb)
                 q_events.put({"done": True, "answer": ans, "metrics": metrics})
             except Exception as e:
                 log.exception("Query pipeline error")

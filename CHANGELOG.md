@@ -34,7 +34,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 #### Core Features
 - ✨ **Multi-Agent RAG System**: Ingestor, Comprehensive Reader, Gatekeeper, and Analyst agents
 - 📄 **Multi-Format Document Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files with OCR
-- 🗄️ **Hybrid Retrieval**: Vector DB (Weaviate) + Graph DB (Neo4j) for comprehensive document search
+- 🗄️ **Hybrid Retrieval**: Vector DB (Weaviate) + Graph DB (Kuzu) for comprehensive document search
 - 🤖 **CrewAI Integration**: Production-ready agent orchestration framework
 - 🌐 **Web UI**: Drag-and-drop ingestion, real-time streaming queries, source citations
 - ⚡ **Microservice Architecture**: Dedicated LLM generation and embedding servers
@@ -76,8 +76,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 
 #### Models
 
-- **LLM**: Qwen/Qwen3-8B (8B parameters)
-- **Embeddings**: BAAI/bge-m3 (dense + sparse + ColBERT)
+- **LLM**: Qwen/Qwen2.5-1.5B-Instruct (8B parameters)
+- **Embeddings**: BAAI/bge-small-en-v1.5 (dense + sparse + ColBERT)
 - **Chunking**: RecursiveCharacterTextSplitter (512 tokens)
 
 #### Dependencies
@@ -86,7 +86,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 - CrewAI 0.36+ for agent orchestration
 - LangChain 0.2+ for LLM integration
 - Weaviate 0.5+ for vector storage
-- Neo4j 5.18+ for graph database
+- Kuzu 5.18+ for graph database
 - Python 3.10+ runtime
 
 ### Documentation
@@ -103,7 +103,7 @@ Environment variables for:
 - LLM server configuration (port 8002)
 - Embedding server configuration (port 8003)
 - Weaviate persistence
-- Neo4j database
+- Kuzu database
 - Flask application
 - RAG parameters (chunk size, overlap, top-k)
 

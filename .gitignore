@@ -123,6 +123,7 @@ dmypy.json
 .pyre/
 
 # HealthExpert specific
+kbdocs/
 uploads/
 data/chroma_db/
 data/security.key
@@ -166,9 +167,8 @@ Thumbs.db
 *.swo
 *~
 
-# Neo4j
-neo4j/data/
-neo4j/logs/
+# Graph Database
+data/kuzu_db/
 
 # Excluded Strategic Documents
 docs/

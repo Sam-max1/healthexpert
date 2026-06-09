@@ -30,7 +30,48 @@ def load_document(file_path: str) -> list[dict[str, Any]]:
     return docs
 
 
-# ── Format handlers ────────────────────────────────────────────────────────────
+# ── Git LFS pointer detection ───────────────────────────────────────────────────
+
+_GIT_LFS_HEADER = b"version https://git-lfs.github.com/spec/v1"
+
+def _is_lfs_pointer(path: str) -> bool:
+    """Return True if file is an un-downloaded Git LFS pointer (not real content)."""
+    try:
+        with open(path, "rb") as f:
+            header = f.read(len(_GIT_LFS_HEADER))
+        return header == _GIT_LFS_HEADER
+    except OSError:
+        return False
+
+
+# ── Noise suppression ───────────────────────────────────────────────────────────
+# Silence chatty third-party loggers that emit INFO/WARNING to the root logger.
+
+import logging as _logging
+
+for _noisy_logger in (
+    "pikepdf",           # "C++ to Python logger bridge initialized"
+    "pikepdf._core",
+    "unstructured",      # "No languages specified, defaulting to English."
+    "unstructured.partition",
+    "unstructured.partition.pdf",
+    "unstructured.documents",
+    "detectron2",
+    "pdfminer",
+    "pdfminer.pdfdocument",
+    "pdfminer.pdfpage",
+    "pdfminer.pdfinterp",
+    "pdfminer.converter",
+    "huggingface_hub",   # "unauthenticated requests to the HF Hub"
+    "transformers",
+    "sentence_transformers",
+    "pytesseract",
+    "PIL",
+):
+    _logging.getLogger(_noisy_logger).setLevel(_logging.ERROR)
+
+
+# ── Format handlers ─────────────────────────────────────────────────────────────
 
 def _txt(path: str) -> list[dict]:
     with open(path, "r", encoding="utf-8", errors="ignore") as f:
@@ -38,14 +79,70 @@ def _txt(path: str) -> list[dict]:
 
 
 def _pdf(path: str) -> list[dict]:
+    """Extract text from PDF with OCR fallback for scanned documents.
+
+    Strategy:
+    1. Detect and reject Git LFS pointer files before trying to open them.
+    2. Try fast text extraction with fitz (PyMuPDF).
+    3. If that yields no text, use unstructured.partition_pdf with hi_res strategy
+       which automatically triggers OCR for scanned PDFs.
+    4. If both fail, return an empty doc (never crashes the pipeline).
+    """
+    log = _logging.getLogger(__name__)
+
+    # Guard: reject Git LFS pointer stubs before PyMuPDF crashes on them
+    if _is_lfs_pointer(path):
+        raise ValueError(
+            f"File '{Path(path).name}' is a Git LFS pointer stub and has not been "
+            "downloaded. Run `git lfs pull` in the repository root to fetch the real file."
+        )
+
     import fitz  # PyMuPDF
-    docs, pdf = [], fitz.open(path)
+
+    # Suppress MuPDF's own C-level stderr chatter
+    import warnings
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            pdf = fitz.open(path)
+        except Exception as exc:
+            raise ValueError(f"Failed to open PDF '{Path(path).name}': {exc}") from exc
+
+    docs = []
     for i, page in enumerate(pdf, 1):
         text = page.get_text().strip()
         if text:
             docs.append({"text": text, "metadata": {"page": i}})
     pdf.close()
-    return docs or [{"text": "", "metadata": {"page": 1}}]
+
+    # If fitz extraction yielded text, return it
+    if docs:
+        return docs
+
+    # Fallback: Try unstructured with hi_res strategy (includes OCR)
+    try:
+        import os
+        # Suppress HF Hub auth warning before importing unstructured OCR pipeline
+        os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+        from unstructured.partition.pdf import partition_pdf  # type: ignore
+        elements = partition_pdf(
+            filename=path,
+            strategy="hi_res",
+            extract_images_in_pdf=False,
+            infer_table_structure=True,
+            languages=["eng"],          # suppress "No languages specified" warning
+        )
+        if elements:
+            text = "\n\n".join([str(element) for element in elements])
+            return [{"text": text, "metadata": {"page": 1, "method": "ocr"}}]
+    except ImportError:
+        pass  # unstructured not installed — skip OCR fallback silently
+    except Exception as e:
+        log.warning("OCR fallback for %s failed: %s. Returning empty document.", path, e)
+
+    return [{"text": "", "metadata": {"page": 1}}]
 
 
 def _docx(path: str) -> list[dict]:
@@ -84,6 +181,8 @@ def _image(path: str) -> list[dict]:
     try:
         import pytesseract
         from PIL import Image
+        import logging
+        logging.getLogger("pytesseract").setLevel(logging.ERROR)
         text = pytesseract.image_to_string(Image.open(path))
         return [{"text": text, "metadata": {"type": "ocr"}}]
     except Exception as e:

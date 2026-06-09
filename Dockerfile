@@ -22,6 +22,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
     libgomp1 \
+    build-essential \
+    cmake \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -50,7 +52,7 @@ RUN chmod +x start.sh
 # ── Environment configuration ─────────────────────────────────────────────────
 # HF_MODE=1 activates low-resource path in config.py, gen_llm.py, embed_llm.py
 ENV HF_MODE=1
-ENV ADMIN_MODE=0
+ENV ADMIN_MODE=1
 ENV PORT=7860
 
 # HuggingFace model cache — use /app/models to keep within Space storage
@@ -69,4 +71,4 @@ EXPOSE 7860
 # -hf activates low-resource mode; ADMIN_MODE env var controls admin controls.
 # To disable admin controls for public endpoint, set ENV ADMIN_MODE=0 above
 # or pass -noadmin here.
-ENTRYPOINT ["bash", "start.sh", "-hf", "-noadmin"]
+ENTRYPOINT ["bash", "start.sh", "-hf"]

@@ -9,7 +9,7 @@
 # Environment variables set by this script:
 #   HF_MODE=1       → Activates low-resource CPU path in config.py, gen_llm.py, embed_llm.py
 #   ADMIN_MODE=0    → Disables admin API routes and hides UI admin controls
-#   GEN_MODEL_ID    → Overridden for HF mode (Qwen2.5-1.5B-Instruct)
+#   GEN_MODEL_ID    → Overridden for HF mode (microsoft/Phi-3.5-mini-instruct)
 #   EMBED_MODEL_ID  → Overridden for HF mode (bge-small-en-v1.5)
 
 # NOTE: Do NOT use 'set -e' here — background processes exiting would abort the script.
@@ -32,16 +32,20 @@ export ADMIN_MODE=$ADMIN_MODE_FLAG
 
 # ── Mode-specific overrides ────────────────────────────────────────────────────
 if [ "$HF_MODE_FLAG" -eq 1 ]; then
-  export GEN_MODEL_ID="Qwen/Qwen2.5-1.5B-Instruct"
+  export GEN_MODEL_ID="Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF"
+  export GEN_MODEL_FILENAME="Qwen3.5-4B.Q4_K_M.gguf"
   export EMBED_MODEL_ID="BAAI/bge-small-en-v1.5"
-  export LLM_MAX_TOKENS=1024
+  export LLM_MAX_TOKENS=512
   export EMBEDDING_BATCH_SIZE=2
+  export TOP_K_VECTOR=3
+  export TOP_K_GRAPH=3
   export EMBED_FP16=false          # CPU only — FP16 unsupported
   export TORCH_COMPILE_SKIP=1      # Skip torch.compile() on CPU (no benefit, adds 30s startup)
   MODE_LABEL="HuggingFace / CPU"
 else
-  export GEN_MODEL_ID="${GEN_MODEL_ID:-Qwen/Qwen3-8B}"
-  export EMBED_MODEL_ID="${EMBED_MODEL_ID:-BAAI/bge-m3}"
+  export GEN_MODEL_ID="${GEN_MODEL_ID:-Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF}"
+  export GEN_MODEL_FILENAME="${GEN_MODEL_FILENAME:-Qwen3.5-4B.Q4_K_M.gguf}"
+  export EMBED_MODEL_ID="${EMBED_MODEL_ID:-BAAI/bge-small-en-v1.5}"
   MODE_LABEL="GPU (Desktop)"
 fi
 

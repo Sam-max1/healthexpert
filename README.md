@@ -33,7 +33,7 @@ pinned: false
 **HealthExpert** is an enterprise-grade AI document analysis platform combining:
 
 - **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
-- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + BM25) + Graph DB (Neo4j) for comprehensive retrieval
+- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + BM25) + Graph DB (Kuzu) for comprehensive retrieval
 - **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
 - **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
 - **🌐 Web UI**: Real-time streaming responses with source citations
@@ -81,11 +81,11 @@ pinned: false
 ┌────▼────┐ ┌───────▼────┐ ┌────────▼──────┐
 │ Pipeline│ │  LLM Srvr  │ │ Embed Server │
 │  Data   │ │ :8002      │ │    :8003     │
-│Processing│ │Qwen3-8B    │ │ BAAI/bge-m3  │
+│Processing│ │Qwen2.5-1.5B-Instruct    │ │ BAAI/bge-small-en-v1.5  │
 └────┬────┘ └───────────┘ └──────────────┘
      │
-     ├─→ ChromaDB (Vector Store, embedded, DB25 hybrid search)
-     └─→ Neo4j (Graph DB)
+     ├─→ ChromaDB (Vector Store, embedded, BM25 hybrid search)
+     └─→ Kuzu (Graph DB)
 ```
 
 ### Data Flow: Ingestion Pipeline
@@ -97,18 +97,18 @@ User Upload
     ↓
 [Chunker] → Split into 512-token chunks (64 overlap)
     ↓
-[Embedder] → Generate dense/sparse embeddings (BAAI/bge-m3)
+[Embedder] → Generate dense/sparse embeddings (BAAI/bge-small-en-v1.5)
     ↓
 ┌─────────────────────────────────────────┐
 │ [ChromaDB] Vector Store (embedded)      │
 │ Stores: chunks + embeddings + metadata  │
-│ Search: DB25 (Dense ANN + BM25 / RRF)   │
+│ Search: BM25 (Dense ANN + BM25 / RRF)   │
 └─────────────────────────────────────────┘
     ↓
 [Entity Extraction] → LLM-powered entity detection
     ↓
 ┌─────────────────────────────────────────┐
-│ [Neo4j] Graph DB                        │
+│ [Kuzu] Graph DB                        │
 │ Stores: entities + relationships        │
 └─────────────────────────────────────────┘
 ```
@@ -158,6 +158,9 @@ source venv/bin/activate  # On Windows: venv\Scripts\activate
 
 # Install dependencies
 pip install -r requirements.txt
+
+# Set HuggingFace token for private KB document syncing
+export HF_PRIVATE_TOKEN=$(secret-tool lookup api huggingface)
 ```
 
 #### 3. Start Microservices
@@ -191,6 +194,7 @@ Open your browser: **http://localhost:5050**
 
 ```bash
 # Start all services
+# Ensure HF_PRIVATE_TOKEN is set in your environment or .env file before running
 docker-compose up -d
 
 # View logs
@@ -244,8 +248,8 @@ healthexpert/
 │   ├── document_loader.py                   # Multi-format document loader
 │   ├── chunker.py                           # Text chunking (512 tokens)
 │   ├── embedder.py                          # Embedding HTTP client
-│   ├── vector_store.py                      # ChromaDB + DB25 hybrid search
-│   └── graph_store.py                       # Neo4j integration
+│   ├── vector_store.py                      # ChromaDB + BM25 hybrid search
+│   └── graph_store.py                       # Kuzu integration
 │
 ├── templates/                               # Web UI (HTML)
 │   └── index.html                           # Main interface
@@ -266,15 +270,16 @@ Create `.env` file to override defaults:
 ```env
 # LLM Generation Server (port 8002)
 LLM_BASE_URL=http://127.0.0.1:8002
-LLM_MODEL_ID=Qwen/Qwen3-8B
+HF_PRIVATE_TOKEN=your_huggingface_token_here
+LLM_MODEL_ID=Qwen/Qwen2.5-1.5B-Instruct
 LLM_MAX_TOKENS=2048
 LLM_TEMPERATURE=0.7
 LLM_TOP_P=0.9
-LLM_TIMEOUT=300
+LLM_TIMEOUT=600
 
 # Embedding Server (port 8003)
 EMBED_BASE_URL=http://127.0.0.1:8003
-EMBEDDING_MODEL=BAAI/bge-m3
+EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
 EMBEDDING_BATCH_SIZE=12
 EMBEDDING_TIMEOUT=120
 
@@ -283,10 +288,10 @@ CHROMA_PERSIST_DIR=./data/chroma_db
 CHROMA_COLLECTION=Document
 ENCRYPTION_KEY_FILE=./data/security.key
 
-# Neo4j
-NEO4J_URI=bolt://localhost:7687
-NEO4J_USER=neo4j
-NEO4J_PASSWORD=healthexpert
+# Kuzu
+KUZU_URI=bolt://localhost:7687
+KUZU_USER=kuzu
+KUZU_PASSWORD=healthexpert
 
 # Flask
 UPLOAD_FOLDER=./uploads
@@ -436,8 +441,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [CrewAI](https://crewai.com/) - Multi-agent framework
 - [LangChain](https://langchain.com/) - LLM orchestration
 - [ChromaDB](https://www.trychroma.com/) - Embedded vector database
-- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for DB25 hybrid search
-- [Neo4j](https://neo4j.com/) - Graph database
+- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for BM25 hybrid search
+- [Kuzu](https://kuzu.com/) - Graph database
 - [Qwen](https://qwenlm.github.io/) - LLM models
 - [BAAI BGE](https://github.com/FlagOpen/FlagEmbedding) - Embedding models
 

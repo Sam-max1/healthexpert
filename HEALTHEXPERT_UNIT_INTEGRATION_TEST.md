@@ -17,7 +17,7 @@
 | Flask | 3.x |
 | ChromaDB | 0.5+ (embedded) |
 | rank-bm25 | 0.2.2+ |
-| Neo4j | 5.18-community (Docker) |
+| Kuzu | 5.18-community (Docker) |
 
 ---
 
@@ -31,8 +31,8 @@
 | `EMBED_BASE_URL` default is `http://127.0.0.1:8003` | ✅ | Pass |
 | `LLM_COMPLETIONS_URL` = `{LLM_BASE_URL}/v1/completions` | ✅ | Pass |
 | `EMBED_EMBEDDINGS_URL` = `{EMBED_BASE_URL}/v1/embeddings` | ✅ | Pass |
-| `EMBEDDING_MODEL` default is `BAAI/bge-m3` | ✅ | Pass |
-| `LLM_MODEL_ID` default is `Qwen/Qwen3-8B` | ✅ | Pass |
+| `EMBEDDING_MODEL` default is `BAAI/bge-small-en-v1.5` | ✅ | Pass |
+| `LLM_MODEL_ID` default is `Qwen/Qwen2.5-1.5B-Instruct` | ✅ | Pass |
 | `ALLOWED_EXTENSIONS` contains `.pdf`, `.txt`, `.docx`, `.xlsx`, `.csv` | ✅ | Pass |
 | Env var `LLM_BASE_URL` overrides default | ✅ | Pass |
 
@@ -42,8 +42,8 @@ conda run -n healthexpert python -c "
 import config
 assert config.LLM_BASE_URL == 'http://127.0.0.1:8002'
 assert config.EMBED_BASE_URL == 'http://127.0.0.1:8003'
-assert config.LLM_MODEL_ID == 'Qwen/Qwen3-8B'
-assert config.EMBEDDING_MODEL == 'BAAI/bge-m3'
+assert config.LLM_MODEL_ID == 'Qwen/Qwen2.5-1.5B-Instruct'
+assert config.EMBEDDING_MODEL == 'BAAI/bge-small-en-v1.5'
 assert '.pdf' in config.ALLOWED_EXTENSIONS
 print('config.py: ALL PASS')
 "
@@ -131,7 +131,7 @@ print(f'DB25 hybrid search: {len(results)} results — PASS')
 | `is_available()` returns bool | ✅ | Pass |
 | `get_stats()` returns dict with `available` key | ✅ | Pass |
 | `get_stats()` with OPTIONAL MATCH — no schema warning | ✅ | Pass |
-| `store_entities()` succeeds when Neo4j is available | Depends on Neo4j | — |
+| `store_entities()` succeeds when Kuzu is available | Depends on Kuzu | — |
 | `query_related([])` returns `[]` | ✅ | Pass |
 
 ```bash
@@ -163,7 +163,7 @@ import sys; sys.path.insert(0, '.')
 from pipeline import embedder
 vecs = embedder.embed_texts(['Hello world', 'Sample policy test'])
 assert len(vecs) == 2
-assert len(vecs[0]) > 100   # bge-m3 dim=1024
+assert len(vecs[0]) > 100   # bge-small-en-v1.5 dim=1024
 print(f'embedder.py: dim={len(vecs[0])} — ALL PASS')
 "
 ```
@@ -219,9 +219,9 @@ print('All Flask route tests: PASS')
 | `/api/ingest` | POST | Unsupported ext → 400 | Rejected list in response | ✅ |
 | `/api/query` | POST | Empty query → 400 | Error message | ✅ |
 | `/api/query` | POST | No docs ingested → 400 | Error message | ✅ |
-| `/api/docker/up` | POST | Starts Neo4j | `ok: true` | ✅ |
-| `/api/docker/down` | POST | Stops Neo4j | `ok: true` | ✅ |
-| `/api/docker/restart` | POST | Restarts Neo4j | `ok: true` | ✅ |
+| `/api/docker/up` | POST | Starts Kuzu | `ok: true` | ✅ |
+| `/api/docker/down` | POST | Stops Kuzu | `ok: true` | ✅ |
+| `/api/docker/restart` | POST | Restarts Kuzu | `ok: true` | ✅ |
 | `/api/docker/invalid` | POST | Unknown action → 400 | Error message | ✅ |
 | `/api/probe/gen` | POST | Probes gen_llm | `ok: bool` | ✅ |
 | `/api/probe/embed` | POST | Probes embed_llm | `ok: bool` | ✅ |
@@ -243,7 +243,7 @@ curl -s -X POST http://127.0.0.1:8002/v1/completions \
 
 | Test | Expected |
 |---|---|
-| `GET /health` → `{"status":"ok","model":"Qwen/Qwen3-8B","quantization":"4-bit NF4 (bitsandbytes)","gpu_id":"cuda:0"}` | ✅ |
+| `GET /health` → `{"status":"ok","model":"Qwen/Qwen2.5-1.5B-Instruct","quantization":"bfloat16 (bitsandbytes)","gpu_id":"cuda:0"}` | ✅ |
 | `POST /v1/completions` with valid prompt → `choices[0].text` non-empty | ✅ |
 | `POST /v1/completions` with empty prompt → 400 + error | ✅ |
 | `POST /v1/completions` batch (list of prompts) → multiple choices | ✅ |
@@ -264,7 +264,7 @@ curl -s -X POST http://127.0.0.1:8003/v1/embeddings \
 
 | Test | Expected |
 |---|---|
-| `GET /health` → `{"status":"ok","model":"BAAI/bge-m3","fp16":true}` | ✅ |
+| `GET /health` → `{"status":"ok","model":"BAAI/bge-small-en-v1.5","fp16":true}` | ✅ |
 | `POST /v1/embeddings` single string → `data[0].embedding` length=1024 | ✅ |
 | `POST /v1/embeddings` list of strings → `data` length matches input | ✅ |
 | `POST /v1/embeddings` empty input → 400 + error | ✅ |
@@ -277,7 +277,7 @@ curl -s -X POST http://127.0.0.1:8003/v1/embeddings \
 ### 9. Full Ingestion Pipeline
 
 ```bash
-# Requires: neo4j running, embed_llm on :8003, gen_llm on :8002, app.py on :5050
+# Requires: kuzu running, embed_llm on :8003, gen_llm on :8002, app.py on :5050
 conda run -n healthexpert python -c "
 import requests, time, pathlib
 
@@ -412,7 +412,7 @@ Docker control integration    ✅  1/1  PASS
 Error handling scenarios      ✅  5/5  PASS
 ```
 
-> **Result:** All 56 specified unit and integration tests have successfully passed. The microservice architecture (ChromaDB + DB25 + Qwen3-8B 4-bit NF4) is fully validated.
+> **Result:** All 56 specified unit and integration tests have successfully passed. The microservice architecture (ChromaDB + DB25 + Qwen2.5-1.5B-Instruct bfloat16) is fully validated.
 
 ---
 
@@ -428,7 +428,7 @@ Error handling scenarios      ✅  5/5  PASS
 > DB25 hybrid search requires at least one document to be ingested. The BM25 component operates over the candidate pool returned by ChromaDB ANN, so it gracefully degrades to pure dense search when `keyword=None`.
 
 > [!WARNING]
-> The `Neo4j RELATES_TO` schema warning was fixed with `OPTIONAL MATCH`. If it reappears, ensure `graph_store.py` uses the latest version with `notifications_min_severity=NotificationMinimumSeverity.OFF`.
+> The `Kuzu RELATES_TO` schema warning was fixed with `OPTIONAL MATCH`. If it reappears, ensure `graph_store.py` uses the latest version with `notifications_min_severity=NotificationMinimumSeverity.OFF`.
 
 > [!TIP]
 > Use the **🧠 Test Gen LLM** and **🔢 Test Embed LLM** buttons in the UI to quickly verify both servers are responding before ingesting documents.

@@ -23,13 +23,10 @@ class LocalLLM(BaseLLM):
         self.use_kv_cache = kwargs.get("use_kv_cache", False)
 
     def call(self, messages: list[dict], callbacks: list[Any] | None = None, **kwargs: Any) -> str:
-        # Flatten conversation history into a single string since gen_llm.py wraps it in a user role
-        prompt = "\n".join([f"{m.get('role', 'user')}: {m.get('content', '')}" for m in messages])
-
         payload = {
             "model_id":    self.model,
-            "prompt":      prompt,
-            "max_tokens":  self.max_tokens,
+            "prompt":      messages,
+            "max_tokens":  kwargs.get("max_tokens") or self.max_tokens,
             "temperature": self.temperature,
             "top_p":       self.top_p,
             "use_kv_cache": self.use_kv_cache,
@@ -42,8 +39,22 @@ class LocalLLM(BaseLLM):
                 timeout=self.timeout,
                 verify=False,
             )
+
+            # ── Handle 503 "Server busy" explicitly ───────────────────────────
+            if resp.status_code == 503:
+                err_body   = resp.json() if resp.content else {}
+                retry_hint = err_body.get("retry_after", 10)
+                reason     = err_body.get("error", "The inference server is busy.")
+                self._last_prompt_tokens     = 0
+                self._last_completion_tokens = 0
+                return (
+                    f"[LLM BUSY] {reason} "
+                    f"The server is processing another request. "
+                    f"Please try again in {retry_hint} seconds."
+                )
+
             resp.raise_for_status()
-            data = resp.json()
+            data  = resp.json()
             usage = data.get("usage", {})
             # Store token counts so callers can read them without CrewAI usage_metrics
             self._last_prompt_tokens     = usage.get("prompt_tokens",     0)
@@ -51,10 +62,18 @@ class LocalLLM(BaseLLM):
             if usage:
                 self._track_token_usage_internal(usage)
             return data["choices"][0]["text"].strip()
+
         except requests.exceptions.ConnectionError:
             self._last_prompt_tokens     = 0
             self._last_completion_tokens = 0
-            return "[LLM ERROR] Cannot connect to local endpoint. Is the AMD/Nvidia server running?"
+            return "[LLM OFFLINE] Cannot connect to the inference server. Is gen_llm.py running?"
+        except requests.exceptions.Timeout:
+            self._last_prompt_tokens     = 0
+            self._last_completion_tokens = 0
+            return (
+                f"[LLM TIMEOUT] The inference server did not respond within {self.timeout}s. "
+                "The server may be busy. Please try again shortly."
+            )
         except Exception as e:
             self._last_prompt_tokens     = 0
             self._last_completion_tokens = 0

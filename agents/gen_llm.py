@@ -89,13 +89,13 @@ try:
     model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE)
     
     log.info("Loading GGUF model via llama.cpp ...")
-    cpu_threads = os.cpu_count() or 4
-    log.info("Llama Init: threads=%d, n_ctx=32768, n_batch=512, numa=True, flash_attn=True", cpu_threads)
+    cpu_threads = 2
+    log.info("Llama Init: threads=%d, n_ctx=8192, n_batch=512, numa=True, flash_attn=True", cpu_threads)
     
     from llama_cpp import Llama
     model = Llama(
         model_path=model_path,
-        n_ctx=32768,         # 32k context to support full KB RAG without excessive memory allocation
+        n_ctx=8192,         # 8k context to reduce memory overhead and speed up prefill
         n_batch=512,
         n_threads=cpu_threads,
         n_gpu_layers=_n_gpu_layers,
@@ -150,24 +150,15 @@ def _run_inference(data: dict) -> dict:
                 {"role": "user", "content": prompt}
             ]
             
-        # Format prompt string using fallback format from aiworkbench
-        prompt_str = ""
-        for msg in messages:
-            role = msg.get("role", "user")
-            content = msg.get("content", "")
-            prompt_str += f"{role.capitalize()}: {content}\n"
-        prompt_str += "Assistant: "
-
-        # Call raw completion API
-        outputs = model(
-            prompt=prompt_str,
+        # Call chat completion API
+        outputs = model.create_chat_completion(
+            messages=messages,
             max_tokens=max_new_tokens,
             temperature=temperature if temperature > 0.15 else 0.0,
             top_p=top_p,
-            top_k=40,
         )
 
-        answer_text = outputs["choices"][0]["text"].strip()
+        answer_text = outputs["choices"][0]["message"]["content"].strip()
         prompt_len = outputs["usage"]["prompt_tokens"]
         completion_len = outputs["usage"]["completion_tokens"]
 
@@ -177,11 +168,14 @@ def _run_inference(data: dict) -> dict:
         # Strip <think>...</think> block
         full_output = answer_text
         think_text  = ""
-        if thinking_mode and "<think>" in full_output:
-            think_end = full_output.find("</think>")
-            if think_end != -1:
-                think_text  = full_output[len("<think>"):think_end].strip()
-                answer_text = full_output[think_end + len("</think>"):].strip()
+        think_end = full_output.find("</think>")
+        if think_end != -1:
+            if "<think>" in full_output:
+                think_start = full_output.find("<think>")
+                think_text  = full_output[think_start + len("<think>"):think_end].strip()
+            else:
+                think_text  = full_output[:think_end].strip()
+            answer_text = full_output[think_end + len("</think>"):].strip()
 
         log.info("Prompt %d → %d new tokens (device=%s, hf_mode=%s)",
                  i, completion_len, _gpu_id, HF_MODE)

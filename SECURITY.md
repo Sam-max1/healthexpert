@@ -70,15 +70,15 @@ We commit to:
 ```python
 # .env (never commit this)
 SECRET_KEY=generate-a-strong-secret-key
-NEO4J_PASSWORD=strong-password-here
+KUZU_PASSWORD=strong-password-here
 LLM_BASE_URL=https://your-domain.com:8002
 ```
 
 ### Database Security
 
 ```bash
-# Neo4j - Change default password
-neo4j-admin set-initial-password <new-password>
+# Kuzu - Change default password
+kuzu-admin set-initial-password <new-password>
 
 # ChromaDB - Store in secure location
 chmod 700 data/chroma_db
@@ -163,7 +163,7 @@ We use reputable, actively maintained libraries:
 - **CrewAI**: Multi-agent framework
 - **LangChain**: LLM orchestration
 - **ChromaDB**: Vector database
-- **Neo4j**: Graph database
+- **Kuzu**: Graph database
 - **Transformers**: Model library
 
 All dependencies are regularly updated.

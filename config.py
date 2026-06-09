@@ -27,27 +27,25 @@ LLM_BASE_URL        = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8002")
 LLM_COMPLETIONS_URL = f"{LLM_BASE_URL}/v1/completions"
 
 # Model selection:
-#   HF mode  → Qwen2.5-1.5B-Instruct (~3 GB RAM, CPU-friendly, good quality)
-#   GPU mode → Qwen3-8B (4-bit NF4 quantised, ~5.5 GB VRAM)
-_default_model   = "Qwen/Qwen2.5-1.5B-Instruct" if HF_MODE else "Qwen/Qwen3-8B"
+#   GPU & HF mode  → Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF
+_default_model   = "Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF"
 LLM_MODEL_ID     = os.getenv("LLM_MODEL_ID",      _default_model)
-LLM_MODEL_FILENAME = os.getenv("LLM_MODEL_FILENAME", "")
+LLM_MODEL_FILENAME = os.getenv("LLM_MODEL_FILENAME", "Qwen3.5-4B.Q4_K_M.gguf")
 
 # Token limits: lower in HF mode to keep CPU inference under ~60 s
-_default_max_tokens = "1024" if HF_MODE else "2048"
+_default_max_tokens = "512" if HF_MODE else "2048"
 LLM_MAX_TOKENS   = int(os.getenv("LLM_MAX_TOKENS",   _default_max_tokens))
 LLM_TEMPERATURE  = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_TOP_P        = float(os.getenv("LLM_TOP_P",       "0.9"))
-LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT",      "300"))
+LLM_TIMEOUT      = int(os.getenv("LLM_TIMEOUT",      "1200"))
 
 # ── Embedding server ───────────────────────────────────────────────────────────
 EMBED_BASE_URL       = os.getenv("EMBED_BASE_URL",  "http://127.0.0.1:8003")
 EMBED_EMBEDDINGS_URL = f"{EMBED_BASE_URL}/v1/embeddings"
 
 # Embedding model:
-#   HF mode  → bge-small-en-v1.5 (~130 MB, 384 dim) — fits alongside LLM in 12 GB
-#   GPU mode → bge-m3 (fp16, ~2.5 GB VRAM) — full multilingual, dense+sparse+colbert
-_default_embed_model = "BAAI/bge-small-en-v1.5" if HF_MODE else "BAAI/bge-m3"
+#   GPU & HF mode  → bge-small-en-v1.5 (~130 MB, 384 dim)
+_default_embed_model = "BAAI/bge-small-en-v1.5"
 EMBEDDING_MODEL      = os.getenv("EMBEDDING_MODEL", _default_embed_model)
 
 # Batch size: smaller in HF mode to avoid RAM spikes during ingestion
@@ -63,24 +61,21 @@ CHROMA_PERSIST_DIR  = os.getenv("CHROMA_PERSIST_DIR", str(BASE_DIR / "data" / "c
 CHROMA_COLLECTION   = os.getenv("CHROMA_COLLECTION",  "Document")
 ENCRYPTION_KEY_FILE = os.getenv("ENCRYPTION_KEY_FILE", str(BASE_DIR / "data" / "security.key"))
 
-# ── Neo4j ──────────────────────────────────────────────────────────────────────
-NEO4J_URI       = os.getenv("NEO4J_URI",      "bolt://localhost:7687")
-NEO4J_USER      = os.getenv("NEO4J_USER",     "neo4j")
-NEO4J_PASSWORD  = os.getenv("NEO4J_PASSWORD", "healthexpert")
-# Neo4j requires Docker-in-Docker which is unavailable on HF Spaces
-NEO4J_AVAILABLE = not HF_MODE
+# ── Kuzu Graph Database ──────────────────────────────────────────────────────────
+KUZU_DB_PATH     = os.getenv("KUZU_DB_PATH", str(BASE_DIR / "data" / "kuzu_db"))
+GRAPH_AVAILABLE  = True  # Kuzu is embedded, works everywhere including HF Spaces
 
 # ── Flask / Upload ─────────────────────────────────────────────────────────────
 UPLOAD_FOLDER       = os.getenv("UPLOAD_FOLDER", str(BASE_DIR / "uploads"))
-MAX_CONTENT_LENGTH  = 1 * 1024 * 1024  # 1 MB limit
+MAX_CONTENT_LENGTH  = 5 * 1024 * 1024  # 5 MB limit
 ALLOWED_EXTENSIONS  = {".txt", ".pdf", ".docx", ".xlsx", ".csv", ".png", ".jpg", ".jpeg", ".webp"}
 SECRET_KEY          = os.getenv("SECRET_KEY", "healthexpert-dev-key-change-in-prod")
 
 # ── RAG ────────────────────────────────────────────────────────────────────────
 CHUNK_SIZE    = int(os.getenv("CHUNK_SIZE",    "512"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "64"))
-TOP_K_VECTOR  = int(os.getenv("TOP_K_VECTOR",  "5"))
-TOP_K_GRAPH   = int(os.getenv("TOP_K_GRAPH",   "5"))
+TOP_K_VECTOR  = int(os.getenv("TOP_K_VECTOR",  "10"))
+TOP_K_GRAPH   = int(os.getenv("TOP_K_GRAPH",   "10"))
 
 # ── HuggingFace model cache ────────────────────────────────────────────────────
 _models_dir = BASE_DIR.parent / "models"

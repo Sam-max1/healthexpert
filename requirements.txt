@@ -20,11 +20,11 @@ crewai-tools>=0.4.0
 sentence-transformers>=3.0.0
 FlagEmbedding>=1.2.0
 
-# LLM Runtime — CUDA build of PyTorch installed separately (see requirements_gpu.txt)
-# bitsandbytes is only usable on CUDA; install separately if needed:
-#   pip install bitsandbytes
+# LLM Runtime
 transformers>=4.40.0
 accelerate>=0.34.0
+--extra-index-url https://abetlen.github.io/llama-cpp-python/whl/cpu
+llama-cpp-python>=0.3.0
 
 # Vector Database
 chromadb>=0.5.0
@@ -36,7 +36,7 @@ rank-bm25>=0.2.2
 cryptography>=41.0.0
 
 # Graph Database
-neo4j>=5.18.0
+kuzu>=0.11.3
 
 # Document Loaders
 PyMuPDF>=1.24.0
@@ -45,6 +45,7 @@ openpyxl>=3.1.0
 pandas>=2.0.0
 pytesseract>=0.3.10
 Pillow>=10.0.0
+unstructured[pdf,image]>=0.12.0
 
 # Utilities
 requests>=2.31.0
@@ -56,3 +57,5 @@ pydantic>=2.0.0
 # System monitoring (CPU/RAM banner in UI)
 psutil>=5.9.0
 rank_bm25
+spacy>=3.7.0
+en-core-web-sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl

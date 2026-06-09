@@ -26,24 +26,75 @@ _text_cache_valid: bool = False         # invalidated on every add/delete/purge
 _bm25_cache: tuple | None = None        # (count, BM25Okapi) – rebuilt on count change
 
 
-def _get_collection() -> chromadb.Collection:
-    global _client, _collection
-    if _collection is None:
-        persist_dir = config.CHROMA_PERSIST_DIR
-        os.makedirs(persist_dir, exist_ok=True)
-        _client = chromadb.PersistentClient(
-            path=persist_dir,
-            settings=Settings(anonymized_telemetry=False),
-        )
-        _collection = _client.get_or_create_collection(
-            name=config.CHROMA_COLLECTION,
-            metadata={"hnsw:space": "cosine"},
-        )
-        count = _collection.count()
+def _validate_and_get_collection() -> chromadb.Collection:
+    """Get or create collection, auto-purging if embedding dims are mismatched."""
+    global _client
+    persist_dir = config.CHROMA_PERSIST_DIR
+    os.makedirs(persist_dir, exist_ok=True)
+    # Assign to the global _client so purge() and subsequent calls share the same instance
+    _client = chromadb.PersistentClient(
+        path=persist_dir,
+        settings=Settings(anonymized_telemetry=False),
+    )
+
+    try:
+        col = _client.get_collection(name=config.CHROMA_COLLECTION)
+        count = col.count()
+
+        # If collection has data, validate embedding dimensions
+        if count > 0:
+            # include=["embeddings"] is required to actually fetch embedding vectors
+            sample = col.get(limit=1, include=["embeddings"])
+            if sample.get("embeddings") and sample["embeddings"]:
+                existing_dim = len(sample["embeddings"][0])
+                try:
+                    from pipeline import embedder
+                    test_embedding = embedder.embed_query("test")
+                    expected_dim = len(test_embedding)
+
+                    if existing_dim != expected_dim:
+                        import logging
+                        log_obj = logging.getLogger("vector_store")
+                        log_obj.warning(
+                            "[VectorStore] Dimension mismatch: collection=%d-dim, "
+                            "embedder=%d-dim. Auto-purging and recreating...",
+                            existing_dim, expected_dim
+                        )
+                        # Delete the stale collection and recreate it fresh
+                        _client.delete_collection(config.CHROMA_COLLECTION)
+                        col = _client.get_or_create_collection(
+                            name=config.CHROMA_COLLECTION,
+                            metadata={"hnsw:space": "cosine"},
+                        )
+                        count = 0  # reset reported count after purge
+                        print(
+                            f"[VectorStore] Collection recreated with {expected_dim}-dim "
+                            f"at {persist_dir}"
+                        )
+                except Exception:
+                    pass  # If validation fails, proceed with existing collection
+
         print(
             f"[VectorStore] ChromaDB collection '{config.CHROMA_COLLECTION}' ready "
             f"({count} docs) at {persist_dir}"
         )
+        return col
+    except Exception:
+        # Collection doesn't exist yet — create it fresh
+        col = _client.get_or_create_collection(
+            name=config.CHROMA_COLLECTION,
+            metadata={"hnsw:space": "cosine"},
+        )
+        print(
+            f"[VectorStore] Created new ChromaDB collection at {persist_dir}"
+        )
+        return col
+
+
+def _get_collection() -> chromadb.Collection:
+    global _client, _collection
+    if _collection is None:
+        _collection = _validate_and_get_collection()
     return _collection
 
 
@@ -153,7 +204,23 @@ def add_chunks(
         vecs.append(vector)
 
     # ChromaDB batch upsert
-    col.upsert(ids=ids, documents=docs, metadatas=metadatas, embeddings=vecs)
+    try:
+        col.upsert(ids=ids, documents=docs, metadatas=metadatas, embeddings=vecs)
+    except Exception as e:
+        error_msg = str(e)
+        # Detect embedding dimension mismatch (happens when switching embedding models)
+        if "dimension" in error_msg.lower() and ("expecting" in error_msg.lower() or "got" in error_msg.lower()):
+            raise ValueError(
+                f"Embedding dimension mismatch: {error_msg}\n"
+                f"This occurs when embedding models are changed (e.g., bge-small→bge-m3). "
+                f"The ChromaDB collection schema no longer matches the new embedder output.\n"
+                f"SOLUTION: Call purge() to clear the collection, or delete data/chroma_db/ manually:\n"
+                f"  python -c \"from pipeline import vector_store; vector_store.purge()\"\n"
+                f"or:\n"
+                f"  rm -rf data/chroma_db/\n"
+                f"Then restart the application to recreate the collection with correct dimensions."
+            ) from e
+        raise
 
     # Invalidate caches so next read reflects the new data
     global _text_cache_valid, _bm25_cache
@@ -209,7 +276,38 @@ def query(
         # DB25: dense + BM25 fusion
         return _db25_fuse(raw, plain_texts, keyword, top_k=k)
 
-    # Pure dense fallback (no keyword supplied)
+def query_dense(
+    query_embedding: list[float],
+    top_k: int | None = None,
+    session_token: str = "admin",
+) -> list[dict]:
+    """Return top_k most similar chunks using pure Vector (cosine) search."""
+    k = top_k or config.TOP_K_VECTOR
+    col = _get_collection()
+
+    if session_token == "admin":
+        where_filter = None
+    else:
+        where_filter = {
+            "$or": [
+                {"tier": {"$eq": "foundation"}},
+                {"session_token": {"$eq": session_token}},
+            ]
+        }
+
+    query_kwargs: dict = dict(
+        query_embeddings=[query_embedding],
+        n_results=min(k, max(col.count(), 1)),
+        include=["documents", "metadatas", "distances"],
+    )
+    if where_filter:
+        query_kwargs["where"] = where_filter
+
+    raw = col.query(**query_kwargs)
+
+    enc_texts = raw["documents"][0] if raw["documents"] else []
+    plain_texts = [decrypt_data(enc) for enc in enc_texts]
+
     results = []
     ids = raw["ids"][0] if raw["ids"] else []
     metadatas = raw["metadatas"][0] if raw["metadatas"] else []
@@ -225,6 +323,68 @@ def query(
             "score": max(0.0, 1.0 - dist),
         })
     return results[:k]
+
+
+def query_bm25(
+    keyword: str,
+    top_k: int | None = None,
+    session_token: str = "admin",
+) -> list[dict]:
+    """Return top_k most similar chunks using pure BM25 keyword search."""
+    k = top_k or config.TOP_K_VECTOR
+    col = _get_collection()
+    
+    if col.count() == 0:
+        return []
+
+    # Fetch all chunks (filtered by RBAC) to rank them
+    # For a real DB this should be indexed, but BM25Okapi works in memory.
+    if session_token == "admin":
+        where_filter = None
+    else:
+        where_filter = {
+            "$or": [
+                {"tier": {"$eq": "foundation"}},
+                {"session_token": {"$eq": session_token}},
+            ]
+        }
+    
+    all_data = col.get(where=where_filter, include=["documents", "metadatas"]) if where_filter else col.get(include=["documents", "metadatas"])
+    enc_docs = all_data.get("documents") or []
+    metadatas = all_data.get("metadatas") or []
+    ids = all_data.get("ids") or []
+
+    if not enc_docs:
+        return []
+
+    plain_texts = [decrypt_data(enc) for enc in enc_docs]
+    
+    # BM25 rank over all decrypted candidate texts
+    tokenized = [t.lower().split() for t in plain_texts]
+    bm25 = BM25Okapi(tokenized)
+    bm25_scores = bm25.get_scores(keyword.lower().split())
+    
+    # Sort by BM25 score descending
+    n = len(plain_texts)
+    bm25_order = sorted(range(n), key=lambda i: bm25_scores[i], reverse=True)
+    
+    results = []
+    for rank, idx in enumerate(bm25_order):
+        if rank >= k:
+            break
+        if bm25_scores[idx] <= 0:  # No keyword match
+            break
+            
+        results.append({
+            "text": plain_texts[idx],
+            "metadata": {
+                "source": metadatas[idx].get("source"),
+                "file_type": metadatas[idx].get("file_type"),
+                "tier": metadatas[idx].get("tier"),
+            },
+            "score": bm25_scores[idx],
+        })
+    return results
 
 
 def list_documents(session_token: str = "admin") -> list[dict]:
@@ -337,16 +497,88 @@ def count() -> int:
     return _get_collection().count()
 
 
+def get_embedding_info() -> dict:
+    """Return information about collection embedding dimensions.
+    
+    Returns:
+        {
+            "collection_exists": bool,
+            "doc_count": int,
+            "embedding_dim": int | None,
+            "embedding_model": str  # from config
+        }
+    """
+    col = _get_collection()
+    count = col.count()
+    embed_dim = None
+    
+    if count > 0:
+        sample = col.get(limit=1)
+        if sample.get("embeddings"):
+            embed_dim = len(sample["embeddings"][0])
+    
+    return {
+        "collection_exists": True,
+        "doc_count": count,
+        "embedding_dim": embed_dim,
+        "embedding_model": config.EMBEDDING_MODEL,
+    }
+
+
 def purge() -> None:
-    """Wipe the entire ChromaDB collection and reset the in-memory client."""
+    """Wipe the entire ChromaDB collection and reset the in-memory client.
+
+    This deletes the Chroma collection (all stored vectors) and clears every
+    in-process cache so that the next call to _get_collection() rebuilds from
+    scratch with the correct embedding dimensions.
+    """
     global _client, _collection, _text_cache, _text_cache_valid, _bm25_cache
-    if _client is not None and _collection is not None:
+    import logging, shutil
+    log_obj = logging.getLogger("vector_store")
+
+    if _client is not None:
         try:
             _client.delete_collection(config.CHROMA_COLLECTION)
-        except Exception:
-            pass
+            log_obj.info("[VectorStore] ChromaDB collection '%s' dropped.", config.CHROMA_COLLECTION)
+        except Exception as e:
+            log_obj.warning("[VectorStore] delete_collection failed (may already be absent): %s", e)
+
+    # Note: we do NOT shutil.rmtree the sqlite directory here, as that causes
+    # 'attempt to write a readonly database' errors on the active PersistentClient.
+    # _client.delete_collection is sufficient to completely wipe the vectors.
+
+    # Reset all in-memory state
     _client = None
     _collection = None
     _text_cache = None
     _text_cache_valid = False
     _bm25_cache = None
+
+
+if __name__ == "__main__":
+    """CLI utility to inspect and manage the vector store."""
+    import sys
+    import json
+    
+    if len(sys.argv) > 1 and sys.argv[1] == "--purge":
+        print("Purging ChromaDB collection...")
+        purge()
+        print("✓ Collection purged. Will be recreated on next ingest.")
+    elif len(sys.argv) > 1 and sys.argv[1] == "--info":
+        info = get_embedding_info()
+        print(json.dumps(info, indent=2))
+    else:
+        print("Vector Store Management")
+        print("-" * 50)
+        info = get_embedding_info()
+        print(f"Model     : {info['embedding_model']}")
+        print(f"Docs      : {info['doc_count']}")
+        if info['embedding_dim']:
+            print(f"Dimension : {info['embedding_dim']}-dim")
+        else:
+            print(f"Dimension : (empty collection)")
+        print()
+        print("Usage:")
+        print("  python -m pipeline.vector_store          # show info")
+        print("  python -m pipeline.vector_store --info   # JSON output")
+        print("  python -m pipeline.vector_store --purge  # clear collection")

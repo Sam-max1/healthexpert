@@ -693,27 +693,39 @@ function addThinkingMsg(qId) {
         <div class="milestone-graph" id="milestone-graph-${qId}">
           <div class="milestone" id="ms-graph-${qId}">
             <div class="milestone-dot"></div>
-            <span>GraphDB <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <div>
+              <span>GraphDB <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+              <div class="milestone-chunks"></div>
+            </div>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-vector-${qId}">
             <div class="milestone-dot"></div>
-            <span>Vector DB <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <div>
+              <span>Vector DB <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+              <div class="milestone-chunks"></div>
+            </div>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-bm25-${qId}">
             <div class="milestone-dot"></div>
-            <span>BM25 Search <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <div>
+              <span>BM25 Search <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+              <div class="milestone-chunks"></div>
+            </div>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-ranking-${qId}">
             <div class="milestone-dot"></div>
-            <span>LLM Ranking <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <span>Cross-Encoder Reranking <span class="milestone-timer" data-time="0">(0.0s)</span></span>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-analysis-${qId}">
             <div class="milestone-dot"></div>
-            <span>LLM Analysis <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <div>
+              <span>LLM Analysis <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+              <div class="milestone-tokens"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -785,11 +797,21 @@ async function submitQuery() {
 
   try {
     const topK = parseInt($('top-k-select')?.value || 5, 10);
-    diag.info('POST /api/query', { query: q, top_k: topK });
+    const maxTokens = parseInt($('max-tokens-select')?.value || 1024, 10);
+    const useVector = $('chk-vector')?.checked ?? true;
+    const useGraph = $('chk-graph')?.checked ?? true;
+    const useBm25 = $('chk-bm25')?.checked ?? true;
+    diag.info('POST /api/query', { query: q, top_k: topK, max_tokens: maxTokens, use_vector: useVector, use_graph: useGraph, use_bm25: useBm25 });
+    
+    // Grey out disabled milestones
+    if (!useGraph) $(`ms-graph-${qId}`)?.classList.add('disabled');
+    if (!useVector) $(`ms-vector-${qId}`)?.classList.add('disabled');
+    if (!useBm25) $(`ms-bm25-${qId}`)?.classList.add('disabled');
+
     const resp = await fetch('/api/query', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query: q, top_k: topK }),
+      body:    JSON.stringify({ query: q, top_k: topK, max_tokens: maxTokens, use_vector: useVector, use_graph: useGraph, use_bm25: useBm25 }),
     });
 
     if (!resp.ok) {
@@ -862,6 +884,20 @@ async function submitQuery() {
             if(msAnalysis) msAnalysis.querySelector('.milestone-dot').className = 'milestone-dot executing';
             startTimer(`ms-analysis-${qId}`);
           }
+          
+          if (payload.chunks !== undefined) {
+            let targetMs = null;
+            if (payload.status === 'graph') targetMs = msGraph;
+            if (payload.status === 'vector') targetMs = msVector;
+            if (payload.status === 'bm25') targetMs = msBm25;
+            if (targetMs) {
+              const chunkDiv = targetMs.querySelector('.milestone-chunks');
+              if (chunkDiv) {
+                chunkDiv.innerText = `${payload.chunks} chunk(s) retrieved`;
+                chunkDiv.classList.add('visible');
+              }
+            }
+          }
         }
 
         // ── Answer chunks → render output ───────────────────────────
@@ -888,6 +924,13 @@ async function submitQuery() {
           const timeStr  = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
           const carbonStr = m.carbon_kg < 0.001 ? '< 1g' : (m.carbon_kg * 1000).toFixed(2) + 'g';
           renderMetricsBanner(m.tokens_in, m.tokens_out, timeStr, carbonStr);
+          
+          if (msAnalysis) {
+            const tokDiv = msAnalysis.querySelector('.milestone-tokens');
+            if (tokDiv) {
+              tokDiv.innerText = `In: ${m.tokens_in} | Out: ${m.tokens_out}`;
+            }
+          }
         }
 
         if (payload.done) { diag.info('SSE: done'); break; }
