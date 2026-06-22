@@ -80,11 +80,11 @@ sequenceDiagram
     participant GS as gen_llm.py :8002
     participant GDB as Kuzu
 
-    Note over F,HF: Startup: Syncs kbdocs/ from dataset if HF_PRIVATE_TOKEN is set
+    Note over F,HF: Startup: Syncs kbdocs/ from Sam-max1/he_data dataset (if HF_TOKEN is set)
     U->>F: POST /api/ingest (file upload)
     F->>F: Save to /uploads, create job
     F-->>U: { job_id }
-    F->>IA: run_ingest_crew(file_path)
+    F->>IA: process_document_pipeline(file_path)
     IA->>DL: load_document(file_path)
     DL-->>IA: pages [text, metadata]
     IA->>CH: chunk_documents(pages)
@@ -92,12 +92,10 @@ sequenceDiagram
     IA->>EM: embed_texts(chunks)
     EM->>ES: POST /v1/embeddings {input: chunks}
     ES-->>EM: {data: [{embedding: [...]}]}
-    EM-->>IA: dense vectors [1024-dim]
+    EM-->>IA: dense vectors [384-dim]
     IA->>VDB: add_chunks(chunks, embeddings, doc_id)
     VDB-->>IA: stored count
-    IA->>GS: POST /v1/completions {prompt: entity_extraction_prompt}
-    GS-->>IA: JSON entity array
-    IA->>IA: Parse JSON (robust error handling)
+    IA->>IA: spaCy NER Pipeline (extract Entities/Relations)
     IA->>GDB: store_entities(entities, source)
     U->>F: GET /api/ingest/status/{job_id}
     F-->>U: { status, results }
@@ -109,35 +107,30 @@ sequenceDiagram
 sequenceDiagram
     participant U as User (Browser)
     participant F as Flask API (SSE)
-    participant CA as Comprehensive Agent
-    participant GA as Gatekeeper Agent
-    participant AA as Analyst Agent
+    participant RP as Retrieval Pipeline
+    participant CR as CrossEncoder Reranker
     participant GS as gen_llm.py :8002
 
-    U->>F: POST /api/query { query }
+    U->>F: POST /api/query { query, X-Session-Token }
     F-->>U: SSE stream open
-    F->>CA: run_query_crew(query)
+    F->>RP: run_query_crew(query)
     
     %% Phase 1
-    CA->>GS: POST /v1/completions {use_kv_cache: true}
-    alt KV Cache Success
-        GS-->>CA: Precompiled Full-Document Inference
-    else KV Cache Failure
-        CA->>VDB: Fallback DB25 hybrid search (Dense + BM25)
-        CA->>GDB: Fallback standard graph search
-    end
+    RP->>RP: Embed Query via embedder
+    RP->>RP: vector_store.query_dense()
+    RP->>RP: vector_store.query_bm25()
+    RP->>RP: graph_store.query_related()
+    RP-->>RP: Dedup & Combine Chunks
     
     %% Phase 2
-    CA->>GA: Context Evaluation (ContextVerificationSpecialist)
-    GA->>GS: POST /v1/completions
-    GS-->>GA: YES or NO (Is grounded?)
+    RP->>CR: Predict Scores for query/chunk pairs
+    CR-->>RP: Reranked Top-K Chunks
     
     %% Phase 3
-    GA->>AA: Synthesize Answer (if YES)
-    AA->>GS: POST /v1/completions
-    GS-->>AA: Markdown answer
-    AA-->>F: answer string
-    F-->>U: SSE chunks → Markdown rendered
+    RP->>GS: Direct LLM Call: Synthesis prompt + Reranked Context
+    GS-->>RP: Markdown answer streaming
+    RP-->>F: SSE metrics & chunks
+    F-->>U: Real-time SSE updates & UI timers
 ```
 
 ---
@@ -225,16 +218,13 @@ sequenceDiagram
 
 | Component | File | Responsibility |
 |---|---|---|
-| **Gen LLM Server** | `agents/gen_llm.py` | Flask :8002 — Qwen/Qwen2.5-1.5B-Instruct bfloat16, `/v1/completions`, `/v1/kv_cache`, `/health` |
-| **Embed LLM Server** | `agents/embed_llm.py` | Flask :8003 — BGEM3 dense/sparse/ColBERT, `/v1/embeddings`, `/v1/embeddings/multi`, `/health` |
+| **Gen LLM Server** | `agents/gen_llm.py` | Flask :8002 — Jackrong/Qwen3.5-2B Reasoning Distilled GGUF (via llama-cpp), `/v1/completions`, `/health` |
+| **Embed LLM Server** | `agents/embed_llm.py` | Flask :8003 — BAAI/bge-small-en-v1.5, `/v1/embeddings`, `/health` |
 | Config | `config.py` | All settings; LLM_BASE_URL (8002) + EMBED_BASE_URL (8003); ChromaDB path; override via env vars |
-| Local LLM | `agents/llm.py` | LangChain wrapper → `POST /v1/completions` on port 8002 |
-| Embedder | `pipeline/embedder.py` | HTTP client → `POST /v1/embeddings` on port 8003 |
-| Tools | `agents/tools.py` | 5 CrewAI `@tool` functions |
-| Crew | `agents/crew.py` | Phase 1 (KV Cache), Phase 2 (Gatekeeper), Phase 3 (Analyst) |
+| Retrieval Pipeline | `agents/crew.py` | Executes DB25 hybrid search + Graph search + CrossEncoder re-ranking + Direct LLM generation |
 | Document Loader | `pipeline/document_loader.py` | Parse 9 file formats; OCR for images |
 | Chunker | `pipeline/chunker.py` | Recursive splitting (langchain_text_splitters), flat chunk dicts |
-| Vector Store | `pipeline/vector_store.py` | **ChromaDB** CRUD, **DB25 hybrid search** (Dense + BM25 via RRF), tier support |
+| Vector Store | `pipeline/vector_store.py` | **ChromaDB** CRUD, **DB25 hybrid search** (Dense + BM25), tier support |
 | Graph Store | `pipeline/graph_store.py` | Kuzu CRUD, OPTIONAL MATCH, tier support |
 | Flask App | `app.py` | REST API + Docker control + Tier Access Admin Auth + KV trigger + Health Metrics + Headless v1 API |
 | CLI | `healthexpert.py` | Standalone command-line interface |
@@ -250,12 +240,10 @@ sequenceDiagram
 | Layer | Technology | Version | Reason |
 |---|---|---|---|
 | Web Framework | Flask | 3.0+ | Lightweight, SSE support |
-| Agent Orchestration | CrewAI | 0.36+ | Multi-agent pipelines |
-| LLM Chaining | LangChain | 0.2+ | LLM abstraction, text splitting |
-| LLM Backend | transformers | 4.57+ | Standard HuggingFace inference, `device_map="auto"` |
-| LLM Model | Qwen/Qwen2.5-1.5B-Instruct | — | 8B params, 131K context, dual thinking/standard mode |
-| LLM Quantization | bitsandbytes | 0.43+ | bfloat16, nested quant — ~3 GB RAM/VRAM |
-| Embedding Backend | FlagEmbedding | — | BGEM3FlagModel, fp16 |
+| LLM Backend | llama-cpp-python | 0.2+ | CPU/GPU optimized execution for GGUF models |
+| LLM Model | Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF | — | Tiny reasoning-distilled edge model |
+| NLP & Graph Extractor | spaCy | 3.7+ | Lightning-fast local NER and relationship extraction |
+| Embedding Backend | sentence-transformers | — | Local bge-small execution |
 | Embedding Model | BAAI/bge-small-en-v1.5 | — | 1024-dim dense + sparse + ColBERT |
 | Vector Database | **ChromaDB** | 0.5+ | Embedded persistent store — no server required |
 | Hybrid Search | **rank-bm25** | 0.2+ | BM25 scorer for DB25 (Dense + BM25) keyword fusion |
@@ -329,55 +317,51 @@ When `keyword=None` (e.g., internal KV cache calls), the system falls back to pu
 
 ---
 
-### 🧠 Generation Model — Qwen2.5-1.5B-Instruct (bfloat16 Quantization)
-**The 2026 Powerhouse: Best Sub-10B Reasoning Model**
+### 🧠 Generation Model — Jackrong/Qwen3.5-2B Reasoning-Distilled (GGUF)
+**The Edge Powerhouse: Best Sub-3B Reasoning Model**
 
 | Property | Detail |
 |---|---|
-| **Parameters** | ~8.2B |
-| **VRAM (float16)** | ~16 GB |
-| **VRAM (bfloat16)** | ~5.5 GB ✅ |
-| **Context Window** | 131,072 tokens (131K) |
-| **Quantization** | `BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4", bnb_4bit_compute_dtype=bfloat16, bnb_4bit_use_double_quant=True)` |
-| **Architecture** | Dual-mode: Thinking + Standard |
-| **Inference Backend** | HuggingFace `transformers` + bitsandbytes |
+| **Parameters** | ~2B |
+| **RAM (Q4_K_M)** | ~2.5 GB ✅ |
+| **Context Window** | 8,192 tokens |
+| **Quantization** | `GGUF (Q4_K_M)` |
+| **Architecture** | Reasoning-Distilled (Claude 4.6 Opus) |
+| **Inference Backend** | `llama-cpp-python` |
 
-**Why bfloat16?**
-- **NF4 (NormalFloat 4-bit)**: Optimal quantization type for normally-distributed weights — superior quality vs INT4.
-- **Double quantization**: Quantizes the quantization constants themselves, saving ~0.4 GB additional VRAM.
-- **bfloat16 compute**: Maintains numerical stability during forward passes despite 4-bit storage.
-- **Net result**: ~3× VRAM reduction (16 GB → 5.5 GB) with minimal quality degradation.
+**Why GGUF & llama-cpp?**
+- **Edge Deployment**: GGUF formats allow deployment on strictly CPU-bound instances (like HuggingFace Spaces) with high performance.
+- **Reasoning Distillation**: The model is distilled from Opus, enabling it to perform structured reasoning (wrapped in `<think>` tags) even at 2B parameters.
+- **Thread Optimization**: Predictable performance scaling across cores using `llama.cpp` thread pinning.
 
 ---
 
 ### Selection Summary
 
-| Criterion | BAAI/bge-small-en-v1.5 (port 8003) | Qwen2.5-1.5B-Instruct NF4 (port 8002) |
+| Criterion | BAAI/bge-small-en-v1.5 (port 8003) | Jackrong/Qwen3.5-2B GGUF (port 8002) |
 |---|---|---|
 | **Role** | Embedding / Retrieval | Text Generation / Synthesis |
-| **VRAM** | ~2 GB | ~5.5 GB (bfloat16) |
-| **Strength** | Hybrid search (dense + sparse + ColBERT) | Complex reasoning + long context |
-| **Context** | 8,192 tokens | 131,072 tokens |
-| **Key feature** | Three vector types in one pass | Dual thinking/standard mode |
-| **Used by** | `pipeline/embedder.py` via HTTP | `agents/llm.py` via HTTP |
+| **RAM** | ~130 MB | ~2.5 GB (Q4_K_M) |
+| **Strength** | Fast local dense embeddings | Complex reasoning + reasoning distillation |
+| **Context** | 512 tokens | 8,192 tokens |
+| **Used by** | `pipeline/embedder.py` via HTTP | `agents/gen_llm.py` via HTTP |
 
 ---
 
-## Agent Roles
+## Execution Roles (Direct Pipeline)
 
-### 🗂️ Ingestor Agent
-- **Role**: Document Ingestion Specialist
-- **Tools**: `IngestDocumentTool`, `ExtractAndStoreEntitiesTool`
-- **Process**: Load → Chunk → Embed (via port 8003) → Store (**ChromaDB**) → Extract entities (via port 8002) → Store graph (Kuzu)
+We have transitioned away from heavy LLM orchestration frameworks (like CrewAI) to a streamlined, direct execution pipeline.
 
-### 🔍 Retriever Agent
-- **Status**: Replaced by KV Cache Inference fallback logic.
-- **Process**: Directly calls **DB25 vector search** and graph search functions when KV Cache fails.
+### 🗂️ Ingestion Pipeline (`process_document_pipeline`)
+- **Process**: Load → Chunk → Embed (via port 8003) → Store (**ChromaDB**)
+- **Graph Extraction**: Runs asynchronously using `spaCy` (NLP) to extract Named Entities (NER) and syntactic relationships, pushing them into Kuzu Graph DB.
 
-### 📊 Analyst Agent
-- **Role**: Information Analyst
-- **Tools**: `SynthesizeAnswerTool`
-- **Process**: Receive merged context → prompt LLM (via port 8002) → return structured Markdown with citations (or zero-retrieval guardrail message if no context matches).
+### 🔍 Retrieval Pipeline (`run_query_crew`)
+- **Retrieval**: Triggers parallel fetches from **Vector DB** (ChromaDB), **Graph DB** (Kuzu), and **BM25** index.
+- **Cross-Encoder Fusion**: The unique chunks are combined and passed through an extremely fast Cross-Encoder model (`ms-marco-MiniLM-L-6-v2`) to intelligently re-rank and filter out context that is semantically irrelevant to the user's specific query.
+
+### 📊 Synthesis Phase
+- **Process**: The reranked Top-K context is formatted into a zero-shot prompt and passed directly to the Gen LLM (via port 8002) for real-time SSE streaming answer generation with source citations.
 
 ---
 

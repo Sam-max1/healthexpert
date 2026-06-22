@@ -30,6 +30,8 @@ class LocalLLM(BaseLLM):
             "temperature": self.temperature,
             "top_p":       self.top_p,
             "use_kv_cache": self.use_kv_cache,
+            "use_gpu":     kwargs.get("use_gpu", False),
+            "cpu_threads": kwargs.get("cpu_threads", 2),
             "attachments": [],
         }
         try:

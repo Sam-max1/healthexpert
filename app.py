@@ -80,10 +80,63 @@ app.secret_key = config.SECRET_KEY
 app.config["MAX_CONTENT_LENGTH"] = config.MAX_CONTENT_LENGTH
 os.makedirs(config.UPLOAD_FOLDER, exist_ok=True)
 
+# F1: Flask-Limiter rate limiting
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+from werkzeug.utils import escape  # F11
+from huggingface_hub import HfApi, hf_hub_download
+
+limiter = Limiter(
+    get_remote_address,
+    app=app,
+    default_limits=["200 per day", "10 per minute"],
+    storage_uri="memory://"
+)
+
+# F2: Strict HTTP security headers
+@app.after_request
+def add_security_headers(response):
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'SAMEORIGIN'
+    response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
+    response.headers['Content-Security-Policy'] = "default-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.jsdelivr.net https://fonts.googleapis.com https://fonts.gstatic.com;"
+    return response
+
+# Global HF API for async log push
+_hf_api = None
+def get_hf_api():
+    global _hf_api
+    if _hf_api is None:
+        token = os.environ.get("HF_PRIVATE_TOKEN") or os.environ.get("HF_TOKEN")
+        if token:
+            _hf_api = HfApi(token=token)
+    return _hf_api
+
+def async_sync_log(local_path: str, repo_path: str):
+    """Async-push a log file to Sam-max1/mat_data dataset."""
+    def _upload():
+        api = get_hf_api()
+        if api:
+            try:
+                api.upload_file(
+                    path_or_fileobj=local_path,
+                    path_in_repo=repo_path,
+                    repo_id="Sam-max1/mat_data",
+                    repo_type="dataset"
+                )
+            except Exception as e:
+                log.warning(f"Failed to push {repo_path} to mat_data: {e}")
+    threading.Thread(target=_upload, daemon=True).start()
+
 # In-memory job tracker for async ingestion
 _jobs: dict[str, dict] = {}
 _active_graph_tasks = 0
 _session_uploads: dict[str, int] = {}
+
+# Async query job tracker (F3)
+_query_jobs: dict[str, dict] = {}
+from concurrent.futures import ThreadPoolExecutor
+_query_executor = ThreadPoolExecutor(max_workers=2)
 
 # Auto-ingest background progress tracker
 _auto_ingest_status: dict = {
@@ -98,6 +151,7 @@ _auto_ingest_status: dict = {
 
 # RBAC Session Tracking
 _active_sessions: dict[str, float] = {}
+_known_sessions: dict[str, str] = {}  # token → IP (F10)
 SESSION_TIMEOUT_SECONDS = 600  # 10 minutes
 
 def _allowed(filename: str) -> bool:
@@ -123,6 +177,43 @@ def block_external_apis():
         if request.path.startswith("/api/v1/"):
             return jsonify({"error": "Headless API access is disabled in public mode."}), 403
 
+# ── Telemetry helpers (F10 / F9) ─────────────────────────────────────────────
+
+def log_session(event_type: str, token: str, ip: str):
+    try:
+        log_dir = Path(__file__).parent / "app" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        session_file = log_dir / "nitdaa_sessions.json"
+        from datetime import datetime, timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        ts = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
+        entry = {"timestamp": ts, "event": event_type, "session_token": token, "ip_address": ip}
+        with open(session_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        async_sync_log(str(session_file), "nitdaa_sessions.json")
+    except Exception as e:
+        log.error(f"Failed to log session: {e}")
+
+def log_query_summary(token: str, ip: str, query: str, chunks_retrieved: int, gen_time: float, success: bool, error: str = "", job_id: str = ""):
+    try:
+        log_dir = Path(__file__).parent / "app" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        summary_file = log_dir / "nitdaa_summary.json"
+        from datetime import datetime, timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        ts = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
+        entry = {
+            "timestamp": ts, "job_id": job_id, "ip_address": ip,
+            "session_token": token, "question": query,
+            "chunks_retrieved": chunks_retrieved,
+            "generation_time_sec": gen_time, "success": success, "error": error
+        }
+        with open(summary_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        async_sync_log(str(summary_file), "nitdaa_summary.json")
+    except Exception as e:
+        log.error(f"Failed to log query summary: {e}")
+
 def get_session_token() -> str:
     """Return session token if the user is not an admin, else 'admin'."""
     if is_admin():
@@ -132,6 +223,11 @@ def get_session_token() -> str:
         token = request.json.get("session_token")
     if not token:
         token = "anonymous"
+    ip = request.remote_addr
+    # F10: log first-seen CONNECT
+    if token not in _known_sessions and token not in ("admin", "anonymous"):
+        _known_sessions[token] = ip
+        log_session("CONNECT", token, ip)
     _active_sessions[token] = time.time()
     return token
 
@@ -194,10 +290,14 @@ def _cleanup_agent():
     while True:
         time.sleep(60)
         now = time.time()
-        expired = [token for token, last_active in _active_sessions.items() 
+        expired = [token for token, last_active in list(_active_sessions.items())
                    if token != "admin" and token != "anonymous" and (now - last_active) > SESSION_TIMEOUT_SECONDS]
         for token in expired:
             log.info(f"Cleanup Agent: Session '{token}' inactive for 10 mins. Purging data...")
+            # F10: log DISCONNECT before purging
+            if token in _known_sessions:
+                log_session("DISCONNECT", token, _known_sessions[token])
+                del _known_sessions[token]
             vector_store.delete_by_session(token)
             graph_store.delete_by_session(token)
             del _active_sessions[token]
@@ -214,6 +314,7 @@ def index():
 
 
 @app.route("/api/status")
+@limiter.exempt  # F12: exempt status polling from rate limits
 def status():
     """Health check for all backends."""
     vec_count  = vector_store.count()
@@ -305,6 +406,14 @@ def sysinfo():
 
         cpu_mhz = round(cpu_freq.current, 0) if cpu_freq else None
 
+        # GPU availability detection
+        gpu_available = False
+        try:
+            import torch
+            gpu_available = torch.cuda.is_available()
+        except Exception:
+            pass
+
         return jsonify({
             "cpu_brand":    cpu_brand,
             "cpu_cores":    cpu_count,
@@ -319,6 +428,7 @@ def sysinfo():
             "disk_pct":     disk_pct,
             "hf_mode":      config.HF_MODE,
             "active_graph_tasks": _active_graph_tasks,
+            "gpu_available": gpu_available,
         })
     except Exception as exc:
         log.warning("sysinfo failed: %s", exc)
@@ -688,14 +798,18 @@ def delete_document(source_name: str):
 
 @app.route("/api/query", methods=["POST"])
 def query():
-    """RAG query — returns a streaming SSE response."""
+    """RAG query — legacy blocking SSE response (kept for backwards compatibility)."""
     data = request.get_json()
     q    = (data or {}).get("query", "").strip()
     top_k = (data or {}).get("top_k")
     max_tokens = (data or {}).get("max_tokens")
     use_vector = (data or {}).get("use_vector", True)
-    use_graph = (data or {}).get("use_graph", True)
-    use_bm25 = (data or {}).get("use_bm25", True)
+    use_graph = False
+    use_bm25 = False
+    use_gpu = bool((data or {}).get("use_gpu", False))
+    cpu_threads = int((data or {}).get("cpu_threads", 2))
+    llm_mode    = (data or {}).get("llm_mode",    "expert")   # F4: expert/assistant
+    llm_backend = (data or {}).get("llm_backend", "local")    # F24: local/nvidia
     if not q:
         return jsonify({"error": "Empty query"}), 400
 
@@ -719,7 +833,7 @@ def query():
                         q_events.put(status)
                     else:
                         q_events.put({"status": status})
-                ans, metrics = run_query_crew(q, top_k=top_k, max_tokens=max_tokens, use_vector=use_vector, use_graph=use_graph, use_bm25=use_bm25, session_token=token, status_callback=cb)
+                ans, metrics = run_query_crew(q, top_k=top_k, max_tokens=max_tokens, use_vector=use_vector, use_graph=use_graph, use_bm25=use_bm25, session_token=token, status_callback=cb, use_gpu=use_gpu, cpu_threads=cpu_threads, llm_mode=llm_mode, llm_backend=llm_backend)
                 q_events.put({"done": True, "answer": ans, "metrics": metrics})
             except Exception as e:
                 log.exception("Query pipeline error")
@@ -750,6 +864,123 @@ def query():
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+# F3: Async Job-ID query system + F4: Dual LLM mode + F11: input escape
+@app.route("/api/query/start", methods=["POST"])
+@limiter.limit("120 per minute")
+def query_start():
+    """Starts a RAG query job and returns a job_id for resumable streaming."""
+    data = request.get_json()
+    q    = escape((data or {}).get("query", "").strip())  # F11
+    top_k = (data or {}).get("top_k")
+    max_tokens = (data or {}).get("max_tokens")
+    use_vector = (data or {}).get("use_vector", True)
+    use_graph = False
+    use_bm25 = False
+    use_gpu = bool((data or {}).get("use_gpu", False))
+    cpu_threads = int((data or {}).get("cpu_threads", 2))
+    llm_mode    = (data or {}).get("llm_mode",    "expert")   # F4: expert/assistant
+    llm_backend = (data or {}).get("llm_backend", "local")    # F24: local/nvidia
+
+    if not q:
+        return jsonify({"error": "Empty query"}), 400
+
+    token = get_session_token()
+    chunk_count = vector_store.count()
+    if chunk_count == 0:
+        return jsonify({"error": "No documents ingested yet. Please upload documents first."}), 400
+
+    log.info("Query/start received (%d chars) | vector store has %d chunks", len(q), chunk_count)
+    remote_addr = request.remote_addr
+
+    job_id = uuid.uuid4().hex[:8]
+    _query_jobs[job_id] = {"events": [], "done": False, "error": None}
+
+    def _run():
+        config.current_session.set(token)
+        try:
+            def cb(status):
+                if isinstance(status, dict):
+                    _query_jobs[job_id]["events"].append(status)
+                else:
+                    _query_jobs[job_id]["events"].append({"status": status})
+            ans, metrics = run_query_crew(q, top_k=top_k, max_tokens=max_tokens, use_vector=use_vector, use_graph=use_graph, use_bm25=use_bm25, session_token=token, status_callback=cb, use_gpu=use_gpu, cpu_threads=cpu_threads, llm_mode=llm_mode, llm_backend=llm_backend)
+            for i in range(0, len(ans), 80):
+                _query_jobs[job_id]["events"].append({"chunk": ans[i:i+80]})
+            _query_jobs[job_id]["events"].append({"metrics": metrics})
+            _query_jobs[job_id]["events"].append({"done": True})
+            _query_jobs[job_id]["done"] = True
+            gen_time = metrics.get("time_seconds", 0)
+            log_query_summary(token, remote_addr, q, top_k or 10, gen_time, True, "", job_id)
+        except Exception as e:
+            log.exception("Query/start pipeline failed")
+            _query_jobs[job_id]["events"].append({"error": str(e)})
+            _query_jobs[job_id]["done"] = True
+            log_query_summary(token, remote_addr, q, top_k or 10, 0, False, str(e), job_id)
+
+    _query_executor.submit(_run)
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/query/stream/<job_id>")
+def query_stream(job_id):
+    """Streams events for a specific query job starting from an offset (resumable)."""
+    offset = int(request.args.get("offset", 0))
+    job = _query_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Job not found or expired"}), 404
+
+    def _generate():
+        idx = offset
+        while True:
+            while idx < len(job["events"]):
+                event = job["events"][idx]
+                yield f"data: {json.dumps(event)}\n\n"
+                if "error" in event or "done" in event:
+                    return
+                idx += 1
+            if job.get("error") or job.get("done"):
+                break
+            time.sleep(0.5)
+            yield ": keep-alive\n\n"
+
+    return Response(
+        stream_with_context(_generate()),
+        mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# F9: Feedback endpoint
+@app.route("/api/feedback", methods=["POST"])
+@limiter.limit("20 per minute")
+def api_feedback():
+    """Accept thumbs, stars and text feedback after a response."""
+    data = request.get_json() or {}
+    job_id = data.get("job_id", "")
+    rating = data.get("rating", "")
+    stars  = data.get("stars", None)
+    text   = data.get("text", "")
+    token  = get_session_token()
+    try:
+        log_dir = Path(__file__).parent / "app" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        summary_file = log_dir / "nitdaa_summary.json"
+        from datetime import datetime, timezone, timedelta
+        ist = timezone(timedelta(hours=5, minutes=30))
+        ts = datetime.now(ist).strftime("%Y-%m-%d %H:%M:%S")
+        entry = {"timestamp": ts, "session_token": token, "job_id": job_id, "type": "feedback"}
+        if rating: entry["feedback_rating"] = rating
+        if stars is not None: entry["feedback_stars"] = stars
+        if text: entry["feedback_text"] = text
+        with open(summary_file, "a") as f:
+            f.write(json.dumps(entry) + "\n")
+        async_sync_log(str(summary_file), "nitdaa_summary.json")
+        return jsonify({"ok": True})
+    except Exception as e:
+        log.error(f"Failed to save feedback: {e}")
+        return jsonify({"error": str(e)}), 500
 
 
 # ── Headless API v1 ───────────────────────────────────────────────────────────
@@ -894,35 +1125,19 @@ def probe_embed():
 
 def start_auto_ingest_thread():
     def _auto_ingest_worker():
+        """F8: Drift-aware dataset sync — purges and rebuilds if remote data changed."""
         global _auto_ingest_status
-        kbdocs_dir = Path(__file__).parent / "kbdocs"
-        kbdocs_dir.mkdir(parents=True, exist_ok=True)
-        
-        hf_token = os.environ.get("HF_PRIVATE_TOKEN")
-        if hf_token:
-            import logging
-            from huggingface_hub import snapshot_download
-            try:
-                logging.info("HF_PRIVATE_TOKEN found, syncing dataset Sam-max1/he-data to %s...", kbdocs_dir)
-                snapshot_download(
-                    repo_id="Sam-max1/he-data",
-                    repo_type="dataset",
-                    local_dir=str(kbdocs_dir),
-                    token=hf_token
-                )
-                logging.info("Dataset synced successfully.")
-            except Exception as e:
-                logging.error("Failed to sync HuggingFace dataset: %s", e)
-        elif not kbdocs_dir.exists():
-            return
+        import requests as req, shutil
+        from huggingface_hub import snapshot_download
 
-        import requests, time
+        token = os.environ.get("HF_PRIVATE_TOKEN") or os.environ.get("HF_TOKEN")
+
+        # Wait for LLM services before doing anything
         log.info("Auto-ingest: waiting for LLM services to boot...")
-        # Wait up to 60s for models
         for _ in range(30):
             try:
-                r1 = requests.get(f"{config.EMBED_BASE_URL}/health", timeout=2)
-                r2 = requests.get(f"{config.LLM_BASE_URL}/health", timeout=2)
+                r1 = req.get(f"{config.EMBED_BASE_URL}/health", timeout=2)
+                r2 = req.get(f"{config.LLM_BASE_URL}/health", timeout=2)
                 if r1.status_code == 200 and r2.status_code == 200:
                     break
             except Exception:
@@ -934,50 +1149,118 @@ def start_auto_ingest_thread():
             _auto_ingest_status["done"] = True
             return
 
-        # Check existing documents to avoid re-ingesting
-        existing = {d["source"] for d in vector_store.list_documents("admin")}
-        files_to_ingest = []
-        for f in kbdocs_dir.iterdir():
-            if f.is_file() and _allowed(f.name) and f.name not in existing:
-                files_to_ingest.append(f)
-
-        if not files_to_ingest:
-            log.info("Auto-ingest: no new files found in kbdocs.")
+        if not token:
+            log.error("HF_TOKEN not set — dataset synchronization skipped.")
+            _auto_ingest_status["error"] = "HF Token missing"
             _auto_ingest_status["done"] = True
             return
 
-        log.info("Auto-ingesting %d files from kbdocs...", len(files_to_ingest))
-        config.current_session.set("admin")
+        # F8 + F7: 2-way log sync on startup
+        log_dir = Path(__file__).parent / "app" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            for log_file in ["nitdaa_sessions.json", "nitdaa_summary.json"]:
+                local_p = log_dir / log_file
+                try:
+                    dl_path = hf_hub_download(repo_id="Sam-max1/mat_data", filename=log_file, repo_type="dataset", token=token)
+                    if os.path.exists(dl_path):
+                        remote_lines = set(open(dl_path).readlines())
+                        if local_p.exists():
+                            for line in open(local_p).readlines():
+                                if line not in remote_lines:
+                                    remote_lines.add(line)
+                        with open(local_p, "w") as f:
+                            for line in sorted(list(remote_lines)):
+                                f.write(line)
+                        log.info(f"Merged {log_file} from mat_data.")
+                except Exception as e:
+                    log.warning(f"Could not download {log_file} from mat_data: {e}")
+        except Exception as e:
+            log.warning(f"Log sync failed: {e}")
 
-        _auto_ingest_status["running"] = True
-        _auto_ingest_status["total"] = len(files_to_ingest)
-        _auto_ingest_status["completed"] = 0
-        _auto_ingest_status["results"] = []
-        _auto_ingest_status["done"] = False
+        kbdocs_dir = Path(__file__).parent / "kbdocs"
+        kbdocs_dir.mkdir(parents=True, exist_ok=True)
 
-        for path in files_to_ingest:
-            _auto_ingest_status["current_file"] = path.name
-            res = process_document_pipeline(str(path), path.name, tier="foundation", token="admin", delete_after=False)
-            _auto_ingest_status["completed"] += 1
-            _auto_ingest_status["results"].append({
-                "file": path.name,
-                "ok": res["ok"],
-                "result": res["result"],
-            })
-            if res["ok"]:
-                log.info("Auto-ingest successful for %s", path.name)
-            else:
-                log.error("Auto-ingest failed for %s: %s", path.name, res["result"])
+        tmp_sync_dir = Path("/tmp/he_data_sync")
+        if tmp_sync_dir.exists():
+            shutil.rmtree(tmp_sync_dir)
+        tmp_sync_dir.mkdir(exist_ok=True)
 
-        _auto_ingest_status["running"] = False
-        _auto_ingest_status["done"] = True
-        _auto_ingest_status["current_file"] = None
-        trigger_kv_cache_update("admin")
+        log.info("Syncing Sam-max1/he-data to /tmp/he_data_sync...")
+        try:
+            snapshot_download(
+                repo_id="Sam-max1/he-data",
+                repo_type="dataset",
+                local_dir=str(tmp_sync_dir),
+                token=token,
+                ignore_patterns=[".git*"]
+            )
+        except Exception as e:
+            log.error(f"Failed to download he-data: {e}")
+            _auto_ingest_status["error"] = f"Download failed: {e}"
+            _auto_ingest_status["done"] = True
+            return
+
+        from pipeline import vector_store as vs, graph_store as gs
+
+        # F8: Compare local vs remote by filename + size
+        local_files  = {f.name: f.stat().st_size for f in kbdocs_dir.glob("*.*") if f.is_file()}
+        remote_files = {f.name: f.stat().st_size for f in tmp_sync_dir.glob("*.*") if f.is_file()}
+
+        is_different = (set(local_files.keys()) != set(remote_files.keys())) or \
+                       any(local_files.get(k) != remote_files.get(k) for k in remote_files)
+
+        if is_different:
+            log.info("Drift detected in he-data! Purging DBs and re-syncing kbdocs.")
+            vs.purge()
+            if gs.is_available():
+                gs.purge()
+            shutil.rmtree(kbdocs_dir)
+            shutil.copytree(tmp_sync_dir, kbdocs_dir)
+
+            files_to_ingest = [f for f in kbdocs_dir.glob("*.*") if f.is_file() and _allowed(f.name)]
+            if not files_to_ingest:
+                log.info("No valid files to ingest in he-data.")
+                _auto_ingest_status["done"] = True
+                return
+
+            config.current_session.set("admin")
+            _auto_ingest_status["running"] = True
+            _auto_ingest_status["total"] = len(files_to_ingest)
+            _auto_ingest_status["completed"] = 0
+            _auto_ingest_status["results"] = []
+            _auto_ingest_status["done"] = False
+
+            for path in files_to_ingest:
+                _auto_ingest_status["current_file"] = path.name
+                log.info(f"Auto-ingesting: {path.name}")
+                res = process_document_pipeline(str(path), path.name, "foundation", "admin", delete_after=False)
+                _auto_ingest_status["completed"] += 1
+                _auto_ingest_status["results"].append({"file": path.name, "ok": res["ok"], "result": res["result"]})
+                if res["ok"]:
+                    log.info("Auto-ingest OK: %s", path.name)
+                else:
+                    log.error("Auto-ingest FAIL: %s — %s", path.name, res["result"])
+
+            _auto_ingest_status["running"] = False
+            _auto_ingest_status["done"] = True
+            _auto_ingest_status["current_file"] = None
+            trigger_kv_cache_update("admin")
+            log.info("=== Full Data Re-Ingestion Complete ===")
+        else:
+            log.info("kbdocs is up-to-date with he-data. No ingestion needed.")
+            _auto_ingest_status["done"] = True
+
+        log.info(f"Vector DB Chunks: {vs.count()}")
+        if gs.is_available():
+            stats = gs.get_stats()
+            log.info(f"Kuzu DB Nodes: {stats.get('nodes', 0)}, Edges: {stats.get('edges', 0)}")
 
     threading.Thread(target=_auto_ingest_worker, daemon=True).start()
 
 
 @app.route("/api/auto-ingest/status")
+@limiter.exempt  # F12: exempt from rate limits — polled frequently by UI
 def auto_ingest_status():
     """Return real-time progress of the background kbdocs auto-ingestion."""
     return jsonify(_auto_ingest_status)

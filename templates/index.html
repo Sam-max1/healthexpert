@@ -21,6 +21,20 @@
     };
   </script>
 </head>
+<!-- F13: Full-page App-Load CAPTCHA overlay — blocks app until solved (once per session) -->
+<div id="app-captcha-overlay" style="position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.85);z-index:9999;display:flex;align-items:center;justify-content:center;" role="dialog" aria-modal="true" aria-label="Security verification">
+  <div style="background:var(--bg-panel,#fff);border-radius:12px;padding:32px 40px;max-width:380px;width:90%;text-align:center;box-shadow:0 8px 40px rgba(0,0,0,0.5);">
+    <div style="font-size:32px;margin-bottom:8px;">🏥</div>
+    <h2 style="margin-bottom:4px;font-size:18px;">Healthcare Policy Expert</h2>
+    <p style="font-size:13px;color:var(--text-muted,#666);margin-bottom:20px;">Please solve the quick check below to continue.</p>
+    <div style="background:var(--bg,#f5f5f5);border-radius:8px;padding:16px;margin-bottom:16px;font-size:18px;font-family:monospace;">
+      <span id="app-captcha-question" style="font-weight:bold;"></span>
+      <input id="app-captcha-input" type="number" style="width:70px;margin-left:12px;padding:6px 10px;border-radius:6px;border:1px solid var(--border,#ccc);font-size:16px;" placeholder="?" aria-label="Captcha answer"/>
+    </div>
+    <div id="app-captcha-error" style="color:#e53e3e;font-size:13px;margin-bottom:12px;display:none;">Incorrect. Try again.</div>
+    <button id="app-captcha-submit" style="background:var(--blue,#3182ce);color:#fff;border:none;border-radius:8px;padding:10px 28px;font-size:15px;cursor:pointer;width:100%;">Verify &amp; Enter</button>
+  </div>
+</div>
 <body role="application" aria-label="Healthcare Policy Expert Application">
 
 <!-- Skip to main content link for keyboard navigation -->
@@ -28,13 +42,23 @@
 
 <!-- ── Header ──────────────────────────────────────────────────────────────── -->
 <header id="app-header" role="banner" aria-label="Application header">
-  <div class="logo">
-    <div class="logo-icon" aria-hidden="false" title="Healthcare Policy Expert">🏥</div>
-    <div class="logo-text">
-      <h1>Healthcare Policy Expert <span id="admin-badge" style="display:none; font-size:12px; background:var(--blue); padding:2px 6px; border-radius:4px; color:#fff;" aria-label="Administrator mode">ADMIN</span></h1>
-      <span id="logo-subtitle">Powered by RAG · Vector DB · Knowledge Graph · CrewAI</span>
+    <div class="logo">
+      <div class="logo-icon" aria-hidden="false" title="Healthcare Policy Expert">🏥</div>
+      <div class="logo-text">
+        <h1>Healthcare Policy Expert <span id="admin-badge" style="display:none; font-size:12px; background:var(--blue); padding:2px 6px; border-radius:4px; color:#fff;" aria-label="Administrator mode">ADMIN</span></h1>
+        <span id="logo-subtitle">Powered by RAG · Vector DB · Knowledge Graph · CrewAI</span>
+      </div>
     </div>
-  </div>
+    <!-- F24: Backend selector — Local (gen_llm) / NVIDIA (nvidia_llm) -->
+    <div id="llm-backend-toggle" style="display:flex;align-items:center;background:var(--bg-panel);border:1px solid var(--border);border-radius:20px;padding:3px;gap:2px;" title="Select inference backend" aria-label="LLM backend selector">
+      <button id="backend-local-btn" class="backend-btn active-local" data-backend="local" aria-pressed="true">🖥️ Local</button>
+      <button id="backend-nvidia-btn" class="backend-btn" data-backend="nvidia" aria-pressed="false">⚡ NVIDIA</button>
+    </div>
+    <!-- F14: Dual LLM Mode slider pill — only shown when NVIDIA backend is active -->
+    <div id="llm-mode-toggle" style="display:none;align-items:center;background:var(--bg-panel);border:1px solid var(--border);border-radius:20px;padding:3px;gap:2px;" title="Switch LLM mode" aria-label="LLM mode selector">
+      <button id="mode-expert-btn" class="mode-btn active" data-mode="expert" aria-pressed="true">🧠 Expert</button>
+      <button id="mode-assistant-btn" class="mode-btn" data-mode="assistant" aria-pressed="false">💬 Assistant</button>
+    </div>
   <div id="status-bar" aria-label="System status indicators" role="region">
     <div class="status-pill" id="status-vector" role="status" aria-label="Vector database status">
       <div class="status-dot" aria-hidden="true"></div>
@@ -66,6 +90,11 @@
   </div>
 </header>
 
+<!-- F20: AI Disclaimer Banner -->
+<div id="ai-disclaimer" role="alert" style="background:#fffbeb;border-bottom:1px solid #f6c90e;color:#7d6608;font-size:12px;text-align:center;padding:6px 16px;">
+  ⚠️ This application uses AI-generated content. Information provided may not be accurate and should not replace professional advice.
+</div>
+
 <!-- ── Resource Monitor Banner ─────────────────────────────────────────────── -->
 <div id="resource-banner" role="region" aria-label="System resource usage">
   <div id="resource-banner-inner">
@@ -92,15 +121,17 @@
     </div>
     <div class="res-divider" aria-hidden="true"></div>
     <div class="res-item" id="res-topk" data-tooltip="Chunks to retrieve" role="status" aria-label="Retrieve Chunks">
-      <label for="top-k-select" style="font-size: 11px; margin-right: 4px; color: var(--text-muted);">Retrieve Chunks:</label>
+      <label for="top-k-select" style="font-size: 11px; margin-right: 4px; color: var(--text-muted);">Retrieve:</label>
       <select id="top-k-select" aria-label="Number of chunks to retrieve" style="background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font-size: 11px; outline: none; cursor: pointer;">
         <option value="1">1</option>
         <option value="2">2</option>
         <option value="3">3</option>
         <option value="4">4</option>
-        <option value="5" selected>5</option>
+        <option value="5">5</option>
         <option value="8">8</option>
-        <option value="10">10</option>
+        <option value="10" selected>10</option>
+        <option value="15">15</option>
+        <option value="20">20</option>
       </select>
     </div>
     <div class="res-divider" aria-hidden="true"></div>
@@ -124,6 +155,24 @@
       </label>
       <label style="font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 3px;">
         <input type="checkbox" id="chk-bm25" checked> BM25
+      </label>
+    </div>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-cpu-cores" data-tooltip="CPU cores for inference" role="status" aria-label="CPU Cores">
+      <label for="cpu-cores-select" style="font-size: 11px; margin-right: 4px; color: var(--text-muted);">CPU Cores:</label>
+      <select id="cpu-cores-select" aria-label="CPU cores to use for inference" style="background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 4px; padding: 2px 4px; font-size: 11px; outline: none; cursor: pointer;">
+        <option value="2" selected>2</option>
+        <option value="4">4</option>
+        <option value="8">8</option>
+        <option value="16">16</option>
+        <option value="32">32</option>
+        <option value="64">64</option>
+      </select>
+    </div>
+    <div class="res-divider" aria-hidden="true"></div>
+    <div class="res-item" id="res-gpu" data-tooltip="Use GPU for inference" role="status" aria-label="GPU Inference" style="display:none;">
+      <label style="font-size: 11px; cursor: pointer; display: flex; align-items: center; gap: 4px;">
+        <input type="checkbox" id="chk-gpu"> GPU
       </label>
     </div>
     <div class="res-divider" aria-hidden="true"></div>
@@ -208,15 +257,81 @@
     </div>
     <div class="panel-body" id="chat-history-wrap" style="display:flex;flex-direction:column;gap:16px;" role="region" aria-label="Chat history and conversation area">
       <div id="chat-history" role="log" aria-label="Chat messages" aria-live="polite">
-        <!-- Welcome message -->
+        <!-- F15: NITDAA Base Insurance Program splash overview (sourced from nitdaa codebase) -->
         <div class="chat-msg assistant" role="article">
           <div class="chat-avatar" aria-hidden="true">🏥</div>
           <div>
             <div class="chat-bubble">
-              <strong>Welcome to Healthcare Policy Expert (NITDAA Base Insurance FAQ - 2026)</strong><br/><br/>
-              Ask me anything about policy, coverage, treatments, or benefits. I'll retrieve answers from FAQ documents using hybrid semantic + graph search. You may upload you own policy document for comparison or additional context (optional). You can search cashless network hospitals as well for all over India.
-              <br/><br/>
-              <span style="font-size:11px; color:var(--text-muted);">📱 On mobile, scroll down to see all panels.</span>
+              <div style="font-weight:700; margin-bottom:1rem; padding-bottom:0.5rem; border-bottom:1px solid var(--border); color:var(--blue);">🏥 NITDAA Base Health Insurance Program — Overview</div>
+              <p style="margin:0 0 10px;"><em>Note: NIT Durgapur Alumni Association is <strong>NOT</strong> responsible for claim settlement; all claims are settled exclusively by Aditya Birla Health Insurance.</em></p>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li><strong>👔 Insurance Broker:</strong> Zopper Insurance Brokers</li>
+                <li><strong>💻 Technology Partner:</strong> Solvy Tech Solutions</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">📅 Enrollment Window (2026)</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li><strong>Base Policy:</strong> 08 June 2026 to 30 June 2026</li>
+                <li><strong>STUP Policy:</strong> 01 July 2026 to 31 July 2026</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">👥 Who Can Be Covered</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li><strong>Mandatory Proposer:</strong> Alumni</li>
+                <li><strong>Eligible Members:</strong> Alumni (Self), Spouse, Up to 4 Children, Up to 2 Parents, Up to 2 Parents-in-Law</li>
+                <li><strong>Not Eligible:</strong> Siblings</li>
+                <li><em>Rule: Alumni Self must enroll before Parents or In-Laws</em></li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">🛡️ Covered Benefits (Base Plan Summary)</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li><strong>Room Entitlement:</strong> Single Private AC</li>
+                <li><strong>Pre-hospitalization:</strong> 60 days | <strong>Post-hospitalization:</strong> 90 days</li>
+                <li><strong>Ambulance (Maximum):</strong> Rs. 10,000</li>
+                <li><strong>Sub-limit:</strong> None | <strong>Co-pay:</strong> Zero</li>
+                <li><strong>Modern Treatment:</strong> 100% of Sum Insured | <strong>AYUSH Coverage:</strong> 100% of Sum Insured</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">💳 Premium and Payment</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li><strong>Payment Frequency:</strong> Annual only (no monthly, quarterly, or half-yearly option)</li>
+                <li><strong>Tax Benefit:</strong> Eligible for Section 80D income tax deduction</li>
+                <li><strong>Premium Rating Basis:</strong> Based on age of the oldest family member, group claims ratio, and is City-neutral.</li>
+                <li><strong>Payment Flow:</strong> Member pays via NITDAA portal ➡️ Collected by Solvy Tech Solutions (Zopper) ➡️ Transferred to Aditya Birla Health Insurance. (Receipt and policy issued by Insurance Company, NOT by NITDAA)</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">🧾 GST Applicability</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li>Group policies (including NITDAA): <strong>18% GST applies</strong> (retained as commercial group service)</li>
+                <li><strong>Total Cost Formula:</strong> Base Premium + 18% GST</li>
+                <li><em>Note: GST was recently removed only for individual/family retail health insurance, not for group policies.</em></li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">💡 Ideal Coverage Strategy</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li>NITDAA Base Cover (3L – 5L) can be used as deductible for STUP cover on top of that (SI 15 Lakh to 200 Lakh). However STUP policy can be opted for higher deductible of 7, 10 and 20 Lakh also. Having a Base policy is not mandatory for STUP.</li>
+                <li>If employer cover lapses (Retirement/job change), add NITDAA Base policy as a back up cover.</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">🔄 Recommended Transition Strategy</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li><strong>Do NOT</strong> immediately cancel existing policy when joining NITDAA. Maintain overlap for at least 1 year.</li>
+                <li>During NITDAA's first year, Pre-Existing Disease (PED) claims go to existing policy (no waiting period).</li>
+                <li>After first renewal of NITDAA, PED wait is waived; then cancel old policy.</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">👨‍👩‍👧‍👦 Coverage Continuity for Family</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li>Family remains fully covered until the next renewal date.</li>
+                <li>For subsequent renewals, surviving spouse/family must contact the NITDAA Alumni team for portal access.</li>
+              </ul>
+
+              <strong style="display:block; margin:12px 0 6px;">👴👵 Coverage for Parents and Parent-in-Laws</strong>
+              <ul style="margin:0 0 10px; padding-left:18px; line-height:1.7;">
+                <li>Available as an extension of alumni's policy.</li>
+              </ul>
+
+              <span style="font-size:11px;color:var(--text-muted);">Ask me anything about coverage, waiting periods, claims, or hospital networks. 📱 On mobile, scroll down to see all panels.</span>
             </div>
           </div>
         </div>
@@ -234,20 +349,52 @@
           🔢 Test Embed LLM
         </button>
       </div>
-      <div id="query-presets" style="display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap;">
-        <button class="preset-btn prompt-fill-btn">What is Base Insurance Policy?</button>
-        <button class="preset-btn prompt-fill-btn">What is Super Top up Insurance Policy?</button>
-        <button class="preset-btn prompt-fill-btn">What is eligibility for insurance Policy?</button>
+      <div id="query-presets" style="display: flex; gap: 8px; margin-bottom: 12px; align-items: center; flex-wrap: wrap;">
+        <label for="question-select" style="font-size: 11px; color: var(--text-muted); white-space: nowrap;">📋 Quick Q:</label>
+        <select id="question-select" aria-label="Select a preset question" style="flex:1; min-width:0; background: var(--bg-panel); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 8px; font-size: 12px; outline: none; cursor: pointer;">
+          <option value="">— Select a question —</option>
+          <option value="What is the waiting period for Pre-Existing Diseases (PEDs) and new members?">1. PED &amp; new member waiting period?</option>
+          <option value="What are the exact Sum Insured (SI) options available under the base policy?">2. What are the available Sum Insured (SI) options?</option>
+          <option value="Can I claim from this policy if I already have employer or retail health insurance?">3. Can I claim if I have employer/retail insurance?</option>
+          <option value="Does the policy have any sub-limits or capping on room rent and treatments?">4. Are there sub-limits on room rent &amp; treatments?</option>
+          <option value="When do I need to inform the insurer for cashless or reimbursement claims?">5. When must I notify for cashless or reimbursement claims?</option>
+          <option value="How fast is cashless pre-authorization approved and how long is it valid?">6. How fast is cashless pre-auth &amp; how long is it valid?</option>
+          <option value="What is the deadline to submit reimbursement documents and get the claim settled?">7. Reimbursement doc deadline &amp; settlement time?</option>
+          <option value="Will my renewal premium increase if I make a claim this year?">8. Will premium increase if I make a claim this year?</option>
+          <option value="Who are the designated contacts for policy enrollment and claim support?">9. Who handles policy enrollment &amp; claim support?</option>
+          <option value="What is the policy for cancellation and getting a premium refund?">10. Cancellation policy &amp; premium refund?</option>
+        </select>
       </div>
       <form id="query-form" onsubmit="return false">
-        <textarea
-          id="query-input"
-          placeholder="Ask about policies, coverage or regulations…"
-          rows="1"
-          aria-label="Query input field"
-        ></textarea>
-        <button id="send-btn" type="submit" aria-label="Send query">➤</button>
-      </form>
+          <textarea
+            id="query-input"
+            placeholder="Ask about policies, coverage or regulations…"
+            rows="1"
+            aria-label="Query input field"
+          ></textarea>
+          <button id="send-btn" type="submit" aria-label="Send query">➤</button>
+        </form>
+      <!-- F16: Post-response inline feedback controls (hidden until answer complete) -->
+      <div id="feedback-controls" style="display:none;" role="region" aria-label="Response feedback">
+        <p style="font-size:13px;margin-bottom:8px;color:var(--text-muted);">Was this answer helpful?</p>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <button id="fb-thumb-up" style="font-size:20px;background:none;border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;" aria-label="Thumbs up">👍</button>
+          <button id="fb-thumb-down" style="font-size:20px;background:none;border:1px solid var(--border);border-radius:8px;padding:6px 12px;cursor:pointer;" aria-label="Thumbs down">👎</button>
+          <div id="fb-stars" style="display:flex;gap:4px;" aria-label="Star rating">
+            <button class="fb-star" data-star="1" style="background:none;border:none;font-size:22px;cursor:pointer;" aria-label="1 star">★</button>
+            <button class="fb-star" data-star="2" style="background:none;border:none;font-size:22px;cursor:pointer;" aria-label="2 stars">★</button>
+            <button class="fb-star" data-star="3" style="background:none;border:none;font-size:22px;cursor:pointer;" aria-label="3 stars">★</button>
+            <button class="fb-star" data-star="4" style="background:none;border:none;font-size:22px;cursor:pointer;" aria-label="4 stars">★</button>
+            <button class="fb-star" data-star="5" style="background:none;border:none;font-size:22px;cursor:pointer;" aria-label="5 stars">★</button>
+          </div>
+        </div>
+        <textarea id="fb-text" style="width:100%;margin-top:8px;padding:8px;border:1px solid var(--border);border-radius:6px;font-size:13px;resize:vertical;" rows="2" placeholder="Optional: additional comments…" aria-label="Optional feedback text"></textarea>
+        <div style="display:flex;gap:8px;margin-top:8px;">
+          <button id="fb-submit-btn" style="background:var(--blue,#3182ce);color:#fff;border:none;border-radius:6px;padding:8px 20px;cursor:pointer;font-size:13px;">Submit Feedback</button>
+          <button id="fb-skip-btn" style="background:none;color:var(--text-muted);border:1px solid var(--border);border-radius:6px;padding:8px 16px;cursor:pointer;font-size:13px;">Skip</button>
+        </div>
+        <div id="fb-thanks" style="display:none;font-size:13px;color:green;margin-top:8px;">✅ Thank you! Your feedback has been logged.</div>
+      </div>
     </div>
   </section>
 
@@ -340,5 +487,81 @@
   });
 </script>
 <script src="{{ url_for('static', filename='app.js') }}"></script>
+<!-- F13: App-load CAPTCHA init + F14: LLM mode toggle + F16: feedback + F17: copy JS — inline since they touch DOM immediately -->
+<script>
+(function() {
+  // F13: Full-page CAPTCHA (once per session)
+  const CAPTCHA_KEY = 'he_captcha_passed';
+  const overlay = document.getElementById('app-captcha-overlay');
+  if (sessionStorage.getItem(CAPTCHA_KEY) === '1') {
+    overlay.style.display = 'none';
+  } else {
+    let ans = 0;
+    function genQ() {
+      const a = Math.floor(Math.random() * 10) + 1;
+      const b = Math.floor(Math.random() * 10) + 1;
+      ans = a + b;
+      document.getElementById('app-captcha-question').textContent = a + ' + ' + b + ' =';
+      document.getElementById('app-captcha-input').value = '';
+      document.getElementById('app-captcha-error').style.display = 'none';
+    }
+    genQ();
+    function verify() {
+      const v = parseInt(document.getElementById('app-captcha-input').value, 10);
+      if (v === ans) {
+        sessionStorage.setItem(CAPTCHA_KEY, '1');
+        overlay.style.display = 'none';
+      } else {
+        document.getElementById('app-captcha-error').style.display = 'block';
+        genQ();
+      }
+    }
+    document.getElementById('app-captcha-submit').addEventListener('click', verify);
+    document.getElementById('app-captcha-input').addEventListener('keydown', function(e) {
+      if (e.key === 'Enter') verify();
+    });
+  }
+})();
+
+// F24: Dual Backend mode toggle (Local/NVIDIA)
+let _llmBackend = 'local';
+const _backendLocal  = document.getElementById('backend-local-btn');
+const _backendNvidia = document.getElementById('backend-nvidia-btn');
+const _modeToggleContainer = document.getElementById('llm-mode-toggle');
+
+if (_backendLocal && _backendNvidia) {
+  function _setBackend(b) {
+    _llmBackend = b;
+    _backendLocal.classList.toggle('active-local', b === 'local');
+    _backendNvidia.classList.toggle('active-nvidia', b === 'nvidia');
+    _backendLocal.setAttribute('aria-pressed', String(b === 'local'));
+    _backendNvidia.setAttribute('aria-pressed', String(b === 'nvidia'));
+    // Only show Expert/Assistant sub-mode if NVIDIA is selected
+    if (_modeToggleContainer) {
+      _modeToggleContainer.style.display = (b === 'nvidia') ? 'flex' : 'none';
+    }
+  }
+  _backendLocal.addEventListener('click',  () => _setBackend('local'));
+  _backendNvidia.addEventListener('click', () => _setBackend('nvidia'));
+}
+window.getLlmBackend = function() { return _llmBackend; };
+
+// F14: Dual LLM mode slider (Expert/Assistant) - shown conditionally
+let _llmMode = 'expert';
+const _modeExpert    = document.getElementById('mode-expert-btn');
+const _modeAssistant = document.getElementById('mode-assistant-btn');
+if (_modeExpert && _modeAssistant) {
+  function _setMode(m) {
+    _llmMode = m;
+    _modeExpert.classList.toggle('active', m === 'expert');
+    _modeAssistant.classList.toggle('active', m === 'assistant');
+    _modeExpert.setAttribute('aria-pressed', String(m === 'expert'));
+    _modeAssistant.setAttribute('aria-pressed', String(m === 'assistant'));
+  }
+  _modeExpert.addEventListener('click',    () => _setMode('expert'));
+  _modeAssistant.addEventListener('click', () => _setMode('assistant'));
+}
+window.getLlmMode = function() { return _llmMode; };
+</script>
 </body>
 </html>

@@ -155,7 +155,7 @@ def run_ingest_crew(file_path: str) -> str:
     return str(result)
 
 
-def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_vector: bool = True, use_graph: bool = True, use_bm25: bool = True, session_token: str = "admin", status_callback=None) -> tuple[str, dict]:
+def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_vector: bool = True, use_graph: bool = True, use_bm25: bool = True, session_token: str = "admin", status_callback=None, use_gpu: bool = False, cpu_threads: int = 2, llm_mode: str = "expert", llm_backend: str = "local") -> tuple[str, dict]:
     """Run the hybrid retrieval + direct LLM synthesis pipeline.
 
     OPTIMIZED PIPELINE (bypasses CrewAI for query path):
@@ -179,7 +179,16 @@ def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_ve
     total_prompt_tokens     = 0
     total_completion_tokens = 0
 
-    llm = _get_llm()  # reuse module-level singleton — zero construction overhead
+    # ── Select LLM backend ────────────────────────────────────────────────────
+    # "local"  → gen_llm on port 8002 (local GGUF, always available)
+    # "nvidia" → nvidia_llm on port 8004 (NVIDIA NIM cloud, needs API key)
+    if llm_backend == "nvidia":
+        llm = LocalLLM(
+            model=config.LLM_MODEL_ID,
+            base_url=config.NVIDIA_BASE_URL,
+        )
+    else:
+        llm = _get_llm()  # reuse module-level singleton — zero construction overhead
 
     # ── Phase 1: Retrieval (no LLM — pure vector + graph search) ─────────────
     if status_callback:
@@ -338,7 +347,7 @@ def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_ve
     answer_text = llm.call([
         {"role": "system", "content": system_prompt_content},
         {"role": "user", "content": user_prompt}
-    ], max_tokens=max_tokens)
+    ], max_tokens=max_tokens, use_gpu=use_gpu, cpu_threads=cpu_threads)
 
     # Track token usage from LocalLLM's last call (stored internally)
     total_prompt_tokens     += getattr(llm, "_last_prompt_tokens",     0)

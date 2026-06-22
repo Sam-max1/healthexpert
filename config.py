@@ -22,9 +22,14 @@ HF_MODE     = bool(os.getenv("HF_MODE")) or _hf_space
 _admin_env  = os.getenv("ADMIN_MODE", "1").lower()
 ADMIN_MODE  = _admin_env not in ("0", "false", "no")
 
-# ── LLM generation server ──────────────────────────────────────────────────────
-LLM_BASE_URL        = os.getenv("LLM_BASE_URL", "http://127.0.0.1:8002")
+# ── LLM generation server (local GGUF — port 8002) ───────────────────────────
+LLM_BASE_URL        = os.getenv("LLM_BASE_URL",    "http://127.0.0.1:8002")
 LLM_COMPLETIONS_URL = f"{LLM_BASE_URL}/v1/completions"
+
+# ── NVIDIA NIM cloud inference server (port 8004) ─────────────────────────────
+# Started by start.sh alongside gen_llm. Requires NVIDIA_API_KEY env var.
+NVIDIA_BASE_URL        = os.getenv("NVIDIA_BASE_URL",    "http://127.0.0.1:8004")
+NVIDIA_COMPLETIONS_URL = f"{NVIDIA_BASE_URL}/v1/completions"
 
 # Model selection:
 #   GPU & HF mode  → Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF

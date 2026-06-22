@@ -2,7 +2,8 @@
 # General-purpose LLM Generation Server — port 8002
 #
 # Modes:
-#   GPU & HF (CPU) : Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF, ~2.5 GB RAM/VRAM
+#   CPU  : llama.cpp on CPU (default; works without GPU)
+#   GPU  : llama.cpp with GPU layers (enabled per-request via use_gpu=true)
 #
 # Multi-user concurrency model:
 #   A single inference worker thread owns all model.create_chat_completion calls.
@@ -12,8 +13,13 @@
 #   the caller can retry without hanging indefinitely.
 #
 # Exposes: POST /v1/completions  (OpenAI-compatible)
-#          POST /v1/kv_cache     (precompile KV cache — GPU mode only)
+#          POST /v1/kv_cache     (no-op — llama.cpp manages natively)
 #          GET  /health          (includes queue_depth for the UI busy badge)
+#
+# GPU/CPU control:
+#   - Pass use_gpu=true in the request body to run on GPU (if available).
+#   - Pass cpu_threads=N in the request body to override thread count (CPU mode).
+#   - If GPU is unavailable, use_gpu is silently ignored.
 #
 # Run: python agents/gen_llm.py
 #      → http://127.0.0.1:8002
@@ -24,7 +30,6 @@ import os
 import warnings
 warnings.filterwarnings("ignore")
 os.environ["PYTHONWARNINGS"]    = "ignore"
-os.environ["CUDA_VISIBLE_DEVICES"] = ""  # Force hide GPU from llama.cpp so it doesn't crash on CUDA buffer allocation in HF mode
 os.environ["LLAMA_NUMA"] = "1"           # Enable NUMA optimizations
 
 import logging
@@ -44,11 +49,13 @@ logging.getLogger("werkzeug").setLevel(logging.ERROR)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-HF_MODE      = True  # Hardcoded to True to permanently disable GPU for HF execution
-MODEL_REPO   = os.getenv("GEN_MODEL_ID", "Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF")
-MODEL_FILE   = os.getenv("GEN_MODEL_FILENAME", "Qwen3.5-4B.Q4_K_M.gguf")
+MODEL_REPO   = os.getenv("GEN_MODEL_ID", "Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF")
+MODEL_FILE   = os.getenv("GEN_MODEL_FILENAME", "Qwen3.5-2B.Q4_K_M.gguf")
 HOST         = os.getenv("GEN_HOST",  "127.0.0.1")
 PORT         = int(os.getenv("GEN_PORT", "8002"))
+
+# Default CPU thread count (overridable per-request)
+DEFAULT_CPU_THREADS = int(os.getenv("GEN_CPU_THREADS", "2"))
 
 # Maximum number of requests that can wait in the inference queue.
 _QUEUE_MAX_SIZE    = int(os.getenv("GEN_QUEUE_MAX", "8"))
@@ -56,68 +63,92 @@ _QUEUE_MAX_SIZE    = int(os.getenv("GEN_QUEUE_MAX", "8"))
 # Per-request timeout (seconds).  Matches config.py LLM_TIMEOUT default.
 _REQUEST_TIMEOUT_S = int(os.getenv("LLM_TIMEOUT", "600"))
 
-log.info("━" * 60)
-log.info("gen_llm starting — mode=%s  model=%s (%s)", "HF/CPU" if HF_MODE else "GPU", MODEL_REPO, MODEL_FILE)
-log.info("Queue: max_size=%d  request_timeout=%ds", _QUEUE_MAX_SIZE, _REQUEST_TIMEOUT_S)
-log.info("━" * 60)
-
 # ── Device / GPU Detection ────────────────────────────────────────────────────
-_n_gpu_layers = 0
+_gpu_available = False
 _gpu_id = "cpu"
 
-if not HF_MODE:
-    try:
-        import torch
-        if torch.cuda.is_available():
-            _cuda_idx = int(os.getenv("GEN_CUDA_DEVICE", "0"))
-            _gpu_id = f"cuda:{_cuda_idx}"
-            _n_gpu_layers = -1
-            log.info("GPU DETECTED — Offloading all layers to %s", _gpu_id)
-    except ImportError:
-        pass
-else:
-    log.info("HF MODE — running on CPU (expected, no GPU required)")
-
-
-# ── Model Initialisation ───────────────────────────────────────────────────────
-_model_ready = threading.Event()
-model = None
-
 try:
-    log.info("Downloading/Locating model from Hub: %s/%s", MODEL_REPO, MODEL_FILE)
-    from huggingface_hub import hf_hub_download
-    model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE)
-    
-    log.info("Loading GGUF model via llama.cpp ...")
-    cpu_threads = 2
-    log.info("Llama Init: threads=%d, n_ctx=8192, n_batch=512, numa=True, flash_attn=True", cpu_threads)
-    
-    from llama_cpp import Llama
-    model = Llama(
-        model_path=model_path,
-        n_ctx=8192,         # 8k context to reduce memory overhead and speed up prefill
-        n_batch=512,
-        n_threads=cpu_threads,
-        n_gpu_layers=_n_gpu_layers,
-        use_mmap=True,
-        use_mlock=True,
-        numa=True,
-        flash_attn=True,
-        verbose=False,
-    )
+    import torch
+    if torch.cuda.is_available():
+        _cuda_idx = int(os.getenv("GEN_CUDA_DEVICE", "0"))
+        _gpu_id = f"cuda:{_cuda_idx}"
+        _gpu_available = True
+        log.info("GPU DETECTED — %s available for on-demand inference", _gpu_id)
+    else:
+        log.info("No CUDA GPU detected — CPU-only inference available")
+except ImportError:
+    log.info("torch not available — GPU detection skipped, CPU-only mode")
 
+# Do NOT set CUDA_VISIBLE_DEVICES="" here — we need GPU access to be possible.
+# GPU layers are set per-model-instance (see _load_model below).
+
+log.info("━" * 60)
+log.info("gen_llm starting — gpu_available=%s  model=%s (%s)", _gpu_available, MODEL_REPO, MODEL_FILE)
+log.info("Default CPU threads=%d  Queue: max_size=%d  request_timeout=%ds",
+         DEFAULT_CPU_THREADS, _QUEUE_MAX_SIZE, _REQUEST_TIMEOUT_S)
+log.info("━" * 60)
+
+
+# ── Model Loading ─────────────────────────────────────────────────────────────
+# We maintain up to two model instances: CPU and (optionally) GPU.
+# This avoids full model reload on every request while allowing GPU offload.
+
+_model_lock  = threading.Lock()
+_models: dict[str, object] = {}   # key: "cpu" or "gpu"
+_model_ready = threading.Event()
+_model_path  = None
+
+
+def _load_model(use_gpu: bool = False):
+    """Load and cache a model instance. Returns the cached instance if already loaded."""
+    mode_key = "gpu" if (use_gpu and _gpu_available) else "cpu"
+    
+    with _model_lock:
+        if mode_key in _models:
+            return _models[mode_key]
+        
+        global _model_path
+        if _model_path is None:
+            log.info("Downloading/Locating model from Hub: %s/%s", MODEL_REPO, MODEL_FILE)
+            from huggingface_hub import hf_hub_download
+            _model_path = hf_hub_download(repo_id=MODEL_REPO, filename=MODEL_FILE)
+        
+        n_gpu_layers = -1 if (use_gpu and _gpu_available) else 0
+        cpu_threads  = DEFAULT_CPU_THREADS
+        
+        log.info("Loading GGUF model — mode=%s  n_gpu_layers=%d  threads=%d", 
+                 mode_key, n_gpu_layers, cpu_threads)
+        
+        from llama_cpp import Llama
+        m = Llama(
+            model_path=_model_path,
+            n_ctx=8192,
+            n_batch=512,
+            n_threads=cpu_threads,
+            n_gpu_layers=n_gpu_layers,
+            use_mmap=True,
+            use_mlock=True,
+            numa=True,
+            flash_attn=True,
+            verbose=False,
+        )
+        _models[mode_key] = m
+        log.info("Model instance [%s] ready!", mode_key)
+        return m
+
+
+# Pre-load CPU model at startup (always available)
+try:
+    _load_model(use_gpu=False)
+    _model_ready.set()
+    log.info("CPU model pre-loaded and ready.")
 except Exception as e:
-    log.error("Failed to load model: %s", e)
+    log.error("Failed to load CPU model: %s", e)
     raise
 
-log.info("Model ready! (%s, device=%s)", MODEL_REPO, _gpu_id)
 
-# ── Flask app & KV Cache ───────────────────────────────────────────────────────
-precompiled_kv_cache = None
-kv_cache_length      = 0
-
+# ── Flask app ─────────────────────────────────────────────────────────────────
 app = Flask(__name__)
-
 
 # ── Inference Queue (multi-user serialization) ─────────────────────────────────
 _inference_queue: _queue_module.Queue = _queue_module.Queue(maxsize=_QUEUE_MAX_SIZE)
@@ -131,15 +162,57 @@ def _run_inference(data: dict) -> dict:
 
     prompts = raw_prompt if isinstance(raw_prompt, list) and (len(raw_prompt) == 0 or not isinstance(raw_prompt[0], dict)) else [raw_prompt]
 
-    _default_max = 1024 if HF_MODE else 2048
-    max_new_tokens = int(  data.get("max_tokens",   _default_max))
-    temperature    = float(data.get("temperature",  0.7))
-    top_p          = float(data.get("top_p",        0.95))
-    thinking_mode  = bool( data.get("thinking_mode", False))
+    use_gpu     = bool(data.get("use_gpu", False))
+    cpu_threads = int(data.get("cpu_threads", DEFAULT_CPU_THREADS))
+
+    # Select model instance (GPU if requested and available, else CPU)
+    model = _load_model(use_gpu=use_gpu)
+    active_device = _gpu_id if (use_gpu and _gpu_available) else "cpu"
+
+    # Apply cpu_threads override if running on CPU and different from default
+    # Note: llama_cpp doesn't support live thread changes; we log the intent.
+    if not (use_gpu and _gpu_available) and cpu_threads != DEFAULT_CPU_THREADS:
+        log.info("cpu_threads=%d requested (model loaded with %d — static per-instance)", 
+                 cpu_threads, DEFAULT_CPU_THREADS)
+
+    _default_max = 1024
+    max_new_tokens  = int(  data.get("max_tokens",        _default_max))
+    
+    # Reasoning models need large token budgets for internal monologue.
+    # Enforce a minimum of 2048 tokens to prevent truncation, unless 
+    # explicitly asking for very small probe tests (<100 tokens).
+    if 100 < max_new_tokens < 2048:
+        max_new_tokens = 2048
+    temperature     = float(data.get("temperature",       0.7))
+    top_p           = float(data.get("top_p",             0.95))
+    top_k           = int(  data.get("top_k",             40))
+    repeat_penalty  = float(data.get("repeat_penalty",    1.15))
+    freq_penalty    = float(data.get("frequency_penalty", 0.1))
 
     choices = []
     total_prompt_tokens     = 0
     total_completion_tokens = 0
+
+    # ── Sliding-window repetition detector (mirrors ai_workbench) ──
+    REP_WINDOW    = 120   # characters to treat as one "phrase"
+    REP_THRESHOLD = 2     # how many duplicate occurrences to tolerate
+
+    def _is_repeating(text: str) -> bool:
+        if len(text) < REP_WINDOW * (REP_THRESHOLD + 1):
+            return False
+        tail = text[-REP_WINDOW:]
+        preceding = text[: -REP_WINDOW]
+        count = 0
+        start = 0
+        while True:
+            idx = preceding.find(tail, start)
+            if idx == -1:
+                break
+            count += 1
+            if count >= REP_THRESHOLD:
+                return True
+            start = idx + 1
+        return False
 
     for i, prompt in enumerate(prompts):
         if isinstance(prompt, list):
@@ -149,36 +222,86 @@ def _run_inference(data: dict) -> dict:
                 {"role": "system", "content": "You are a helpful, respectful and honest assistant."},
                 {"role": "user", "content": prompt}
             ]
-            
-        # Call chat completion API
-        outputs = model.create_chat_completion(
+
+        # Call chat completion API using streaming with full sampling controls
+        stream = model.create_chat_completion(
             messages=messages,
             max_tokens=max_new_tokens,
             temperature=temperature if temperature > 0.15 else 0.0,
             top_p=top_p,
+            top_k=top_k,
+            repeat_penalty=repeat_penalty,
+            frequency_penalty=freq_penalty,
+            stream=True,
         )
 
-        answer_text = outputs["choices"][0]["message"]["content"].strip()
-        prompt_len = outputs["usage"]["prompt_tokens"]
-        completion_len = outputs["usage"]["completion_tokens"]
+        full_output = ""
+        prompt_len = len(str(messages)) // 4
+        completion_len = 0
+        
+        print(f"\n[CONSOLE STREAM] Generating for: {MODEL_REPO}")
+        print("-" * 30)
+
+        for chunk in stream:
+            if "choices" in chunk and len(chunk["choices"]) > 0:
+                choice = chunk["choices"][0]
+                text_part = choice.get("delta", {}).get("content", "")
+                if not text_part:
+                    text_part = choice.get("text", "") # fallback if delta not present
+                    
+                if text_part:
+                    print(text_part, end="", flush=True)
+                    full_output += text_part
+                    completion_len += 1
+
+                if _is_repeating(full_output):
+                    print("\n[CONSOLE STREAM] Repetition detected — cutting off generation.")
+                    full_output = full_output[:-REP_WINDOW].strip()
+                    break
+
+        print("\n" + "-" * 30)
+
+        answer_text = full_output.strip()
 
         total_prompt_tokens     += prompt_len
         total_completion_tokens += completion_len
 
-        # Strip <think>...</think> block
-        full_output = answer_text
+        # Strip <think>...</think> block robustly (handles 4 failure modes)
         think_text  = ""
-        think_end = full_output.find("</think>")
+        think_end = answer_text.find("</think>")
+        think_start = answer_text.find("<think>")
+        
         if think_end != -1:
-            if "<think>" in full_output:
-                think_start = full_output.find("<think>")
-                think_text  = full_output[think_start + len("<think>"):think_end].strip()
+            # Case 1: Both <think> and </think> present
+            if think_start != -1 and think_start < think_end:
+                think_text = answer_text[think_start + len("<think>"):think_end].strip()
+                answer_text = (answer_text[:think_start] + "\n" + answer_text[think_end + len("</think>"):]).strip()
             else:
-                think_text  = full_output[:think_end].strip()
-            answer_text = full_output[think_end + len("</think>"):].strip()
+                # Case 2: Only </think> found — model started thinking implicitly
+                think_text = answer_text[:think_end].strip()
+                answer_text = answer_text[think_end + len("</think>"):].strip()
+        elif think_start != -1:
+            # Case 3: Orphaned <think> with NO </think> — model exhausted tokens mid-thought
+            think_text = answer_text[think_start + len("<think>"):].strip()
+            answer_text = answer_text[:think_start].strip()
+        
+        # Case 4: No tags at all — detect untagged thinking patterns from tiny models
+        if not answer_text or (not think_text and answer_text):
+            _THINK_PREFIXES = (
+                "Thinking Process:", "Let me analyze", "Let me think",
+                "I need to analyze", "Let me break this down",
+                "Let me review", "Let me examine", "Let me consider",
+                "I'll analyze", "Step 1:", "1.  **Analyze",
+            )
+            stripped = answer_text.lstrip("\n ")
+            for prefix in _THINK_PREFIXES:
+                if stripped.startswith(prefix):
+                    think_text = stripped
+                    answer_text = ""
+                    break
 
-        log.info("Prompt %d → %d new tokens (device=%s, hf_mode=%s)",
-                 i, completion_len, _gpu_id, HF_MODE)
+        log.info("Prompt %d → %d new tokens (device=%s, gpu=%s, threads=%d)",
+                 i, completion_len, active_device, use_gpu and _gpu_available, cpu_threads)
 
         choices.append({
             "index":    i,
@@ -193,12 +316,12 @@ def _run_inference(data: dict) -> dict:
             "prompt_tokens":     total_prompt_tokens,
             "completion_tokens": total_completion_tokens,
         },
+        "device": active_device,
     }
 
 
 def _inference_worker() -> None:
     log.info("Inference worker thread started (pid=%d)", os.getpid())
-    _model_ready.set()
 
     while True:
         try:
@@ -238,12 +361,15 @@ def health():
 
     queue_depth = _inference_queue.qsize()
     is_ready    = _model_ready.is_set()
+    loaded_modes = list(_models.keys())
 
     return jsonify({
         "status":           "ok" if is_ready else "loading",
         "model":            MODEL_REPO,
-        "hf_mode":          HF_MODE,
+        "gpu_available":    _gpu_available,
         "gpu_id":           _gpu_id,
+        "loaded_modes":     loaded_modes,
+        "default_threads":  DEFAULT_CPU_THREADS,
         "kv_cache_length":  0,
         "kv_cache_enabled": False,
         "torch_compile":    False,

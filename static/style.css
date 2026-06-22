@@ -1304,15 +1304,23 @@ body.is-mobile #chat-panel {
   filter: grayscale(1);
 }
 .milestone-chunks {
-  font-size: 9px;
+  font-size: 10px;
   color: var(--accent);
+  font-weight: 600;
   margin-top: 2px;
   margin-left: 16px;
+  display: block;
   opacity: 0;
   transition: opacity 0.3s;
+  font-family: 'Fira Code', monospace;
+  letter-spacing: 0.2px;
 }
 .milestone-chunks.visible {
   opacity: 1;
+}
+/* Ensure chunk count text is always legible when present */
+.milestone-chunks:not(:empty) {
+  opacity: 1 !important;
 }
 .milestone-tokens {
   font-size: 9px;
@@ -1320,4 +1328,50 @@ body.is-mobile #chat-panel {
   margin-top: 2px;
   margin-left: 10px;
   font-family: monospace;
+}
+/* GPU checkbox label highlight */
+#res-gpu label {
+  color: var(--green);
+  font-weight: 600;
+}
+#chk-gpu:checked + span,
+#chk-gpu:checked ~ * {
+  color: var(--green);
+}
+
+/* F14/F24: LLM Mode + Backend toggle pills */
+.mode-btn {
+  background: none;
+  border: none;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.2s, color 0.2s;
+}
+.mode-btn.active {
+  background: var(--blue);
+  color: #fff !important;   /* force white — fixes text vanishing on dark/light themes */
+}
+/* F24: Backend toggle — Local (green) / NVIDIA (violet) */
+.backend-btn {
+  background: none;
+  border: none;
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: background 0.2s, color 0.2s;
+}
+.backend-btn.active-local {
+  background: #16a34a;
+  color: #fff !important;
+}
+.backend-btn.active-nvidia {
+  background: #7c3aed;
+  color: #fff !important;
 }

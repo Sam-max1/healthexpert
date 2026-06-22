@@ -270,6 +270,35 @@ async function pollSysInfo() {
       badge.className    = 'res-mode-badge ' + (isHf ? 'hf-mode' : 'gpu-mode');
     }
 
+    // GPU checkbox — show only if GPU is available
+    const gpuItem = $('res-gpu');
+    if (gpuItem) {
+      gpuItem.style.display = d.gpu_available ? 'flex' : 'none';
+    }
+
+    // CPU cores — populate up to system max (powers of 2)
+    const cpuCoresSelect = $('cpu-cores-select');
+    if (cpuCoresSelect && d.cpu_cores) {
+      const maxCores = d.cpu_cores;
+      const current = parseInt(cpuCoresSelect.value || '2', 10);
+      cpuCoresSelect.innerHTML = '';
+      let n = 2;
+      while (n <= maxCores) {
+        const opt = document.createElement('option');
+        opt.value = String(n);
+        opt.textContent = String(n);
+        if (n === current || (n === 2 && current < 2)) opt.selected = true;
+        cpuCoresSelect.appendChild(opt);
+        n *= 2;
+      }
+      // Ensure at least value=2 is present even if cpu_cores < 2
+      if (!cpuCoresSelect.options.length) {
+        const opt = document.createElement('option');
+        opt.value = '2'; opt.textContent = '2'; opt.selected = true;
+        cpuCoresSelect.appendChild(opt);
+      }
+    }
+
     // Graph Extraction Active
     const activeGraph = $('status-graph-active');
     const dbGraph = $('status-graph');
@@ -611,6 +640,20 @@ $('preset-gen').addEventListener('click', async () => {
   btn.disabled = false;
 });
 
+// ── Question dropdown ─────────────────────────────────────────────────────────
+const questionSelect = document.getElementById('question-select');
+if (questionSelect) {
+  questionSelect.addEventListener('change', () => {
+    const val = questionSelect.value;
+    if (!val) return;
+    queryInput.value = val;
+    queryInput.style.height = 'auto';
+    queryInput.style.height = Math.min(queryInput.scrollHeight, 160) + 'px';
+    questionSelect.value = '';
+    submitQuery();
+  });
+}
+
 $('preset-embed').addEventListener('click', async () => {
   diag.info('Probing embed_llm server…');
   notify('Testing Embed LLM server (port 8003)…', 'info', 3000);
@@ -796,30 +839,47 @@ async function submitQuery() {
   }
 
   try {
-    const topK = parseInt($('top-k-select')?.value || 5, 10);
+    const topK = parseInt($('top-k-select')?.value || 10, 10);
     const maxTokens = parseInt($('max-tokens-select')?.value || 1024, 10);
     const useVector = $('chk-vector')?.checked ?? true;
     const useGraph = $('chk-graph')?.checked ?? true;
     const useBm25 = $('chk-bm25')?.checked ?? true;
-    diag.info('POST /api/query', { query: q, top_k: topK, max_tokens: maxTokens, use_vector: useVector, use_graph: useGraph, use_bm25: useBm25 });
-    
+    const useGpu = $('chk-gpu')?.checked ?? false;
+    const cpuThreads = parseInt($('cpu-cores-select')?.value || 2, 10);
+    // F14: include llm_mode and llm_backend from header toggle (set by inline script)
+  const llmMode = (typeof window.getLlmMode === 'function') ? window.getLlmMode() : 'expert';
+  const llmBackend = (typeof window.getLlmBackend === 'function') ? window.getLlmBackend() : 'local';
+
+  diag.info('POST /api/query/start', { query: q, top_k: topK, max_tokens: maxTokens, llm_mode: llmMode, llm_backend: llmBackend });
+
     // Grey out disabled milestones
     if (!useGraph) $(`ms-graph-${qId}`)?.classList.add('disabled');
     if (!useVector) $(`ms-vector-${qId}`)?.classList.add('disabled');
     if (!useBm25) $(`ms-bm25-${qId}`)?.classList.add('disabled');
 
-    const resp = await fetch('/api/query', {
+    // F3: Start async job
+    const startResp = await fetch('/api/query/start', {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify({ query: q, top_k: topK, max_tokens: maxTokens, use_vector: useVector, use_graph: useGraph, use_bm25: useBm25 }),
+      body:    JSON.stringify({ query: q, top_k: topK, max_tokens: maxTokens, use_vector: useVector, use_graph: useGraph, use_bm25: useBm25, use_gpu: useGpu, cpu_threads: cpuThreads, llm_mode: llmMode, llm_backend: llmBackend }),
     });
 
-    if (!resp.ok) {
-      const errData = await resp.json();
-      throw new Error(errData.error || `HTTP ${resp.status}`);
+    if (!startResp.ok) {
+      const errData = await startResp.json();
+      throw new Error(errData.error || `HTTP ${startResp.status}`);
+    }
+    const { job_id } = await startResp.json();
+    state.currentQueryJobId = job_id;
+
+    // F3: Stream results from job (resumable with offset)
+    let streamOffset = 0;
+    const streamResp = await fetch(`/api/query/stream/${job_id}?offset=${streamOffset}`);
+
+    if (!streamResp.ok) {
+      throw new Error(`Stream failed: HTTP ${streamResp.status}`);
     }
 
-    const reader  = resp.body.getReader();
+    const reader  = streamResp.body.getReader();
     const decoder = new TextDecoder();
     let   buffer  = '';
 
@@ -951,6 +1011,9 @@ async function submitQuery() {
     state.lastAnswer = fullText;
     notify('Answer ready!', 'success', 2500);
 
+    // F16: Show feedback controls after answer is complete
+    showFeedbackUI(state.currentQueryJobId);
+
     // On mobile, scroll to output panel after answer is ready
     if (document.body.classList.contains('is-mobile')) {
       const outputPanel = document.getElementById('output-panel');
@@ -1020,6 +1083,78 @@ function escHtml(s) {
     .replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
+
+// F16: Feedback UI show/submit/hide helpers
+let _feedbackJobId = null;
+let _fbRating = '';
+let _fbStars  = 0;
+
+function showFeedbackUI(jobId) {
+  _feedbackJobId = jobId || '';
+  _fbRating = '';
+  _fbStars  = 0;
+  const fc = $('feedback-controls');
+  const qf = $('query-form');
+  if (fc) { fc.style.display = 'block'; }
+  if (qf) { qf.style.display = 'none'; }
+  const thanks = $('fb-thanks');
+  if (thanks) thanks.style.display = 'none';
+  // Reset star colors
+  document.querySelectorAll('.fb-star').forEach(s => { s.style.color = ''; });
+  const txt = $('fb-text');
+  if (txt) txt.value = '';
+}
+
+function hideFeedbackUI() {
+  const fc = $('feedback-controls');
+  const qf = $('query-form');
+  if (fc) fc.style.display = 'none';
+  if (qf) { qf.style.display = ''; sendBtn.disabled = false; }
+}
+
+(function initFeedback() {
+  const thumbUp   = $('fb-thumb-up');
+  const thumbDown = $('fb-thumb-down');
+  const submitBtn = $('fb-submit-btn');
+  const skipBtn   = $('fb-skip-btn');
+  const thanks    = $('fb-thanks');
+
+  if (thumbUp)   thumbUp.addEventListener('click', () => {
+    _fbRating = 'up';
+    if (thumbUp)   thumbUp.style.background = 'rgba(0,200,0,0.12)';
+    if (thumbDown) thumbDown.style.background = '';
+  });
+  if (thumbDown) thumbDown.addEventListener('click', () => {
+    _fbRating = 'down';
+    if (thumbDown) thumbDown.style.background = 'rgba(200,0,0,0.12)';
+    if (thumbUp)   thumbUp.style.background = '';
+  });
+
+  document.querySelectorAll('.fb-star').forEach(btn => {
+    btn.addEventListener('click', () => {
+      _fbStars = parseInt(btn.dataset.star, 10);
+      const starColors = ['#e53e3e','#dd6b20','#d69e2e','#38a169','#2b6cb0'];
+      document.querySelectorAll('.fb-star').forEach((s, i) => {
+        s.style.color = i < _fbStars ? starColors[_fbStars - 1] : '';
+      });
+    });
+  });
+
+  if (submitBtn) submitBtn.addEventListener('click', async () => {
+    try {
+      const text = ($('fb-text') || {}).value || '';
+      await fetch('/api/feedback', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ job_id: _feedbackJobId, rating: _fbRating, stars: _fbStars || null, text }),
+      });
+    } catch(e) { diag.warn('Feedback post failed:', e); }
+    if (thanks) { thanks.style.display = 'block'; }
+    setTimeout(hideFeedbackUI, 2000);
+  });
+
+  if (skipBtn) skipBtn.addEventListener('click', hideFeedbackUI);
+})();
 
 // ── Auto-ingest background progress banner ─────────────────────────────────────
 

@@ -1,15 +1,15 @@
 #!/bin/bash
-# start.sh — HealthExpert service orchestrator
+# start.sh — HealthExpert-HF service orchestrator
 #
 # Usage:
-#   bash start.sh              # Full GPU mode (default desktop)
+#   bash start.sh              # GPU mode using NVIDIA NIM cloud API
 #   bash start.sh -hf          # HuggingFace low-resource mode (CPU, small models)
 #   bash start.sh -hf -noadmin # HF mode with admin controls disabled (public endpoint)
 #
 # Environment variables set by this script:
-#   HF_MODE=1       → Activates low-resource CPU path in config.py, gen_llm.py, embed_llm.py
+#   HF_MODE=1       → Activates low-resource CPU path in config.py, embed_llm.py
 #   ADMIN_MODE=0    → Disables admin API routes and hides UI admin controls
-#   GEN_MODEL_ID    → Overridden for HF mode (microsoft/Phi-3.5-mini-instruct)
+#   GEN_MODEL_ID    → Overridden for HF mode (small local GGUF)
 #   EMBED_MODEL_ID  → Overridden for HF mode (bge-small-en-v1.5)
 
 # NOTE: Do NOT use 'set -e' here — background processes exiting would abort the script.
@@ -32,10 +32,10 @@ export ADMIN_MODE=$ADMIN_MODE_FLAG
 
 # ── Mode-specific overrides ────────────────────────────────────────────────────
 if [ "$HF_MODE_FLAG" -eq 1 ]; then
-  export GEN_MODEL_ID="Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF"
-  export GEN_MODEL_FILENAME="Qwen3.5-4B.Q4_K_M.gguf"
+  export GEN_MODEL_ID="Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF"
+  export GEN_MODEL_FILENAME="Qwen3.5-2B.Q4_K_M.gguf"
   export EMBED_MODEL_ID="BAAI/bge-small-en-v1.5"
-  export LLM_MAX_TOKENS=512
+  export LLM_MAX_TOKENS=2048
   export EMBEDDING_BATCH_SIZE=2
   export TOP_K_VECTOR=3
   export TOP_K_GRAPH=3
@@ -43,8 +43,8 @@ if [ "$HF_MODE_FLAG" -eq 1 ]; then
   export TORCH_COMPILE_SKIP=1      # Skip torch.compile() on CPU (no benefit, adds 30s startup)
   MODE_LABEL="HuggingFace / CPU"
 else
-  export GEN_MODEL_ID="${GEN_MODEL_ID:-Jackrong/Qwen3.5-4B-Claude-4.6-Opus-Reasoning-Distilled-GGUF}"
-  export GEN_MODEL_FILENAME="${GEN_MODEL_FILENAME:-Qwen3.5-4B.Q4_K_M.gguf}"
+  export GEN_MODEL_ID="${GEN_MODEL_ID:-Jackrong/Qwen3.5-2B-Claude-4.6-Opus-Reasoning-Distilled-GGUF}"
+  export GEN_MODEL_FILENAME="${GEN_MODEL_FILENAME:-Qwen3.5-2B.Q4_K_M.gguf}"
   export EMBED_MODEL_ID="${EMBED_MODEL_ID:-BAAI/bge-small-en-v1.5}"
   MODE_LABEL="GPU (Desktop)"
 fi
@@ -84,23 +84,30 @@ else
     fi
   done
   # Also kill by process name for orphaned workers
-  pkill -9 -f "agents/gen_llm.py"  2>/dev/null || true
-  pkill -9 -f "agents/embed_llm.py" 2>/dev/null || true
+  pkill -9 -f "agents/nvidia_llm.py" 2>/dev/null || true
+  pkill -9 -f "agents/embed_llm.py"  2>/dev/null || true
   sleep 2
   echo "[pre-flight] Done."
 fi
 
-# ── Start embed_llm on port 8003 ──────────────────────────────────────────────
-echo "[1/3] Starting embed_llm (port 8003)..."
+# ── Start gen_llm on port 8002 (local GGUF inference) ────────────────────────
+echo "[1/4] Starting embed_llm (port 8003)..."
 python agents/embed_llm.py &
 EMBED_PID=$!
 echo "      embed_llm PID: $EMBED_PID"
 
-# ── Start gen_llm on port 8002 ────────────────────────────────────────────────
-echo "[2/3] Starting gen_llm (port 8002)..."
+echo "[2/4] Starting gen_llm (local GGUF, port 8002)..."
 python agents/gen_llm.py &
 GEN_PID=$!
 echo "      gen_llm PID: $GEN_PID"
+
+# ── Start nvidia_llm on port 8004 (NVIDIA NIM cloud router) ──────────────────
+# Runs in both HF and GPU modes. Requires NVIDIA_API_KEY env var.
+# If NVIDIA_API_KEY is not set, nvidia_llm starts but returns errors on requests.
+echo "[3/4] Starting nvidia_llm (NVIDIA NIM cloud, port 8004)..."
+python agents/nvidia_llm.py &
+NVIDIA_PID=$!
+echo "      nvidia_llm PID: $NVIDIA_PID"
 
 # ── Wait for microservices to initialise ──────────────────────────────────────
 echo "Waiting for LLM microservices to initialise..."
@@ -111,8 +118,8 @@ else
   sleep 5
 fi
 
-# ── Start Flask web application ───────────────────────────────────────────────
-echo "[3/3] Starting Flask web application (port ${PORT:-7860})..."
+# ── Start Flask web application ─────────────────────────────────────────
+echo "[4/4] Starting Flask web application (port ${PORT:-7860})..."
 python app.py &
 APP_PID=$!
 echo "      app.py PID: $APP_PID"
@@ -120,7 +127,8 @@ echo "      app.py PID: $APP_PID"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo "  All services started."
 echo "  Access: http://0.0.0.0:${PORT:-7860}"
-echo "  PIDs  : embed=$EMBED_PID  gen=$GEN_PID  app=$APP_PID"
+echo "  PIDs  : embed=$EMBED_PID  gen=$GEN_PID  nvidia=$NVIDIA_PID  app=$APP_PID"
+echo "  Ports : embed=8003  local_llm=8002  nvidia_llm=8004  app=${PORT:-7860}"
 echo "  Stop  : bash scripts/cleanup.sh"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 

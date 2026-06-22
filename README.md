@@ -9,6 +9,7 @@ pinned: false
 ---
 
 # HealthExpert 🏥
+**Version 1.0 Public Release**
 
 ![HealthExpert Admin UI Dashboard](static/screenshot.png)<div align="center">
 
@@ -32,22 +33,24 @@ pinned: false
 
 **HealthExpert** is an enterprise-grade AI document analysis platform combining:
 
-- **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
-- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + BM25) + Graph DB (Kuzu) for comprehensive retrieval
-- **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
-- **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
-- **🌐 Web UI**: Real-time streaming responses with source citations
-- **🔐 Production-Ready**: Error handling, logging, async jobs, and Docker support
+- **🤖 Multi-Agent RAG**: Specialized pipeline spanning Hybrid DBs (Vector + BM25 + Graph)
+- **📱 Nitdaa HF Sibling**: A mobile-friendly MVP UI deployed on HuggingFace Spaces with multi-tenant session isolation. [Launch Application (sam-max1-nitdaa.hf.space)](https://sam-max1-nitdaa.hf.space/)
+- **⚡ High-Speed Ingestion**: Fast local spaCy NER pipeline for automated Kuzu graph construction (no LLM required)
+- **🧠 Reasoning-Distilled Local Models**: Fast edge execution using Llama.cpp and Qwen/Phi tiny models
+- **📥 Dynamic KB Sync**: Auto-syncs private knowledge bases from HuggingFace Datasets on boot
+- **🌐 Web UI**: Real-time streaming responses with detailed metric telemetry
+- **🔐 Production-Ready**: Token-based session tracking, JSON auditing, error handling, and Docker support
 
 ### Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Multi-Agent Processing** | Ingestor, Comprehensive Reader, Gatekeeper, and Analyst agents |
-| **Advanced Retrieval** | KV-cache optimization, vector + graph search fallbacks |
+| **Hybrid Retrieval** | KV-cache optimization, Vector + Graph + BM25 search fallback |
+| **Mobile Sibling** | Nitdaa Edge UI with responsive design & HuggingFace deployment |
 | **Document Support** | 7 file types with automatic format detection |
-| **Real-time Streaming** | SSE-based streaming responses with source citations |
-| **Async Processing** | Non-blocking document ingestion with job tracking |
+| **Real-time Streaming** | SSE-based streaming responses with real-time timers and token telemetry |
+| **Async Processing** | Non-blocking document ingestion with job tracking & HF Dataset sync |
+| **Session Auditing** | `nitdaa_sessions.json` and `nitdaa_summary.json` structured JSON tracking |
 | **Admin Dashboard** | Monitor system status, manage documents, view embeddings |
 | **Docker Ready** | Complete docker-compose setup included |
 
@@ -102,10 +105,10 @@ User Upload
 ┌─────────────────────────────────────────┐
 │ [ChromaDB] Vector Store (embedded)      │
 │ Stores: chunks + embeddings + metadata  │
-│ Search: BM25 (Dense ANN + BM25 / RRF)   │
+│ Search: Dense ANN + BM25                │
 └─────────────────────────────────────────┘
     ↓
-[Entity Extraction] → LLM-powered entity detection
+[Entity Extraction] → spaCy Local NER (fast, 0 LLM cost)
     ↓
 ┌─────────────────────────────────────────┐
 │ [Kuzu] Graph DB                        │
@@ -441,9 +444,10 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [CrewAI](https://crewai.com/) - Multi-agent framework
 - [LangChain](https://langchain.com/) - LLM orchestration
 - [ChromaDB](https://www.trychroma.com/) - Embedded vector database
-- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for BM25 hybrid search
+- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for sparse search
 - [Kuzu](https://kuzu.com/) - Graph database
-- [Qwen](https://qwenlm.github.io/) - LLM models
+- [Qwen](https://qwenlm.github.io/) / [Phi-3.5] - Local Edge LLMs
+- [spaCy](https://spacy.io/) - Local Entity Extraction
 - [BAAI BGE](https://github.com/FlagOpen/FlagEmbedding) - Embedding models
 
 ---
