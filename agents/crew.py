@@ -210,8 +210,10 @@ def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_ve
     if use_graph:
         try:
             if graph_store.is_available():
-                # Use query words as entity hints
-                entity_hints = [w for w in query.split() if len(w) > 4][:5]
+                # Use query words as entity hints (clean punctuation and stop words)
+                words = [w.strip('.,:;?!-_"\'()[]{}').strip().lower() for w in query.split()]
+                stop_words = {"about", "above", "after", "again", "against", "along", "among", "would", "could", "should", "under", "below", "there", "their", "these", "those", "which", "where", "while", "whose", "shall", "other"}
+                entity_hints = [w for w in words if len(w) > 4 and w not in stop_words][:5]
                 related = graph_store.query_related(entity_hints, hops=2, session_token=session_token)
                 if related:
                     # To strengthen Graph DB logic, we fetch actual context chunks for the related entities

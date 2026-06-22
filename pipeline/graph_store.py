@@ -147,18 +147,22 @@ def query_related(entity_names: list[str], hops: int = 2, session_token: str = "
     hops = min(max(1, hops), 3)
 
     for name in entity_names:
+        cleaned_name = name.strip('.,:;?!-_"\'()[]{}').strip()
+        if not cleaned_name or len(cleaned_name) < 3:
+            continue
         try:
-            # Kuzu uses variable length paths similar to openCypher
+            # Substring case-insensitive match for robustness
             query = f"""
-                MATCH (e:Entity {{name: $name}})
-                WHERE e.tier = 'foundation' OR e.session_token = $session_token OR $session_token = 'admin'
+                MATCH (e:Entity)
+                WHERE (lower(e.name) CONTAINS lower($name))
+                  AND (e.tier = 'foundation' OR e.session_token = $session_token OR $session_token = 'admin')
                 OPTIONAL MATCH (e)-[r:RELATES_TO*1..{hops}]-(related:Entity)
                 WHERE related.tier = 'foundation' OR related.session_token = $session_token OR $session_token = 'admin'
                 RETURN DISTINCT related.name AS name, related.type AS type
                 LIMIT $limit
             """
             
-            df = conn.execute(query, {"name": str(name), "session_token": str(session_token), "limit": config.TOP_K_GRAPH * 3}).get_as_df()
+            df = conn.execute(query, {"name": str(cleaned_name), "session_token": str(session_token), "limit": config.TOP_K_GRAPH * 3}).get_as_df()
             if not df.empty:
                 for idx, row in df.iterrows():
                     # Handle None values correctly
@@ -166,7 +170,7 @@ def query_related(entity_names: list[str], hops: int = 2, session_token: str = "
                         type_str = row['type'] if row['type'] is not None else "General"
                         results.append(f"{row['name']} ({type_str})")
         except Exception as e:
-            print(f"[GraphStore] Failed to query related for {name}: {e}")
+            print(f"[GraphStore] Failed to query related for {cleaned_name}: {e}")
             
     # Deduplicate and limit
     unique_results = list(dict.fromkeys(results))
