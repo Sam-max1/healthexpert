@@ -64,6 +64,7 @@ class LocalLLM(BaseLLM):
             # Store token counts so callers can read them without CrewAI usage_metrics
             self._last_prompt_tokens     = usage.get("prompt_tokens",     0)
             self._last_completion_tokens = usage.get("completion_tokens", 0)
+            self._last_model_name        = data.get("model", self.model)
             if usage:
                 self._track_token_usage_internal(usage)
             return data["choices"][0]["text"].strip()

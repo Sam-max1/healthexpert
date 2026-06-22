@@ -830,10 +830,28 @@ async function submitQuery() {
   const qId = Date.now();
   const thinkingEl = addThinkingMsg(qId);
 
-  outputContainer.innerHTML = `<div class="output-placeholder">
-    <div class="ph-icon">⚙️</div>
-    <div>Analyzing healthcare policy documents…</div>
-  </div>`;
+  // Remove placeholder if present
+  const placeholder = outputContainer.querySelector('.output-placeholder');
+  if (placeholder) {
+    outputContainer.innerHTML = '';
+  }
+
+  // Create a new response block
+  const blockId = `response-${Date.now()}`;
+  const responseBlock = document.createElement('div');
+  responseBlock.className = 'response-block';
+  responseBlock.id = blockId;
+  responseBlock.innerHTML = `
+    <div class="response-query">❓ Question: ${escHtml(q)}</div>
+    <div class="response-answer-text">
+      <span class="thinking-text" style="color:var(--text-muted); font-style:italic;">Thinking…</span>
+    </div>
+    <div class="response-metrics" style="display:none; padding-right:40px;"></div>
+    <button class="response-copy-btn" title="Copy question, answer, and metrics" aria-label="Copy to clipboard">📋</button>
+  `;
+  outputContainer.appendChild(responseBlock);
+  outputContainer.scrollTop = outputContainer.scrollHeight;
+
   metricsBanner.style.display = 'none';
   metricsBanner.innerHTML     = '';
   citationsBlock.innerHTML    = '';
@@ -841,6 +859,10 @@ async function submitQuery() {
 
   let fullText  = '';
   let chunkCount = 0;
+  let metrics = null;
+  let timeStr = '';
+  let carbonStr = '';
+  let modelName = '';
 
   // Hoisted outside try{} so catch{} and finally{} can access them
   // (let/function inside try{} are block-scoped and invisible to catch{})
@@ -1004,23 +1026,37 @@ async function submitQuery() {
           }
           fullText += payload.chunk;
           chunkCount++;
-          renderOutput(fullText);
+          renderOutputBlock(responseBlock, fullText);
         }
 
         // ── Metrics → banner at top of output panel ─────────────────
         if (payload.metrics) {
-          const m = payload.metrics;
-          const min      = Math.floor(m.time_seconds / 60);
-          const sec      = Math.round(m.time_seconds % 60);
-          const timeStr  = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
-          const carbonStr = m.carbon_kg < 0.001 ? '< 1g' : (m.carbon_kg * 1000).toFixed(2) + 'g';
-          renderMetricsBanner(m.tokens_in, m.tokens_out, timeStr, carbonStr);
+          metrics = payload.metrics;
+          const min      = Math.floor(metrics.time_seconds / 60);
+          const sec      = Math.round(metrics.time_seconds % 60);
+          timeStr  = min > 0 ? `${min}m ${sec}s` : `${sec}s`;
+          carbonStr = metrics.carbon_kg < 0.001 ? '< 1g' : (metrics.carbon_kg * 1000).toFixed(2) + 'g';
+          modelName = metrics.model_name || 'Qwen3.5-2B';
+          
+          renderMetricsBanner(metrics.tokens_in, metrics.tokens_out, timeStr, carbonStr);
           
           const localMsAnalysis = document.getElementById(`ms-analysis-${qId}`);
           if (localMsAnalysis) {
             const tokDiv = localMsAnalysis.querySelector('.milestone-tokens');
             if (tokDiv) {
-              tokDiv.innerText = `In: ${m.tokens_in} | Out: ${m.tokens_out}`;
+              tokDiv.innerText = `In: ${metrics.tokens_in} | Out: ${metrics.tokens_out}`;
+            }
+          }
+
+          // Update metrics and model name inside the response block
+          if (responseBlock) {
+            const metricsDiv = responseBlock.querySelector('.response-metrics');
+            if (metricsDiv) {
+              metricsDiv.innerHTML = `
+                <span>📊 <strong>Metrics:</strong> 🔢 ${metrics.tokens_in} in / ${metrics.tokens_out} out tokens | ⏱ ${timeStr} | 🌱 ${carbonStr} CO₂</span>
+                <span style="margin-left:auto;">🧠 <strong>Model:</strong> <code>${escHtml(modelName)}</code></span>
+              `;
+              metricsDiv.style.display = 'flex';
             }
           }
         }
@@ -1038,7 +1074,33 @@ async function submitQuery() {
       if (dot && !dot.className.includes('failed')) dot.className = 'milestone-dot complete';
     });
     addChatMsg('Answer generated — see the Output panel ↓', 'assistant');
-    copyBtn.style.display = 'block';
+    
+    // Add copy listener for this specific response block
+    if (responseBlock) {
+      const blockCopyBtn = responseBlock.querySelector('.response-copy-btn');
+      if (blockCopyBtn) {
+        const capturedText = fullText;
+        const capturedTime = timeStr;
+        const capturedCarbon = carbonStr;
+        const capturedModel = modelName;
+        const capturedTokensIn = metrics ? metrics.tokens_in : 0;
+        const capturedTokensOut = metrics ? metrics.tokens_out : 0;
+
+        blockCopyBtn.addEventListener('click', async () => {
+          try {
+            const textToCopy = `Question: ${q}\n\nAnswer:\n${capturedText}\n\nMetrics:\n- Tokens: ${capturedTokensIn} in / ${capturedTokensOut} out\n- Latency: ${capturedTime}\n- Carbon: ${capturedCarbon} CO₂\n- Model: ${capturedModel}`;
+            await navigator.clipboard.writeText(textToCopy);
+            blockCopyBtn.textContent = '✓';
+            notify('Copied to clipboard', 'info', 2000);
+            setTimeout(() => { blockCopyBtn.textContent = '📋'; }, 2000);
+          } catch (err) {
+            diag.error('Copy failed:', err);
+            notify('Could not copy', 'warn');
+          }
+        });
+      }
+    }
+
     state.lastAnswer = fullText;
     notify('Answer ready!', 'success', 2500);
 
@@ -1059,9 +1121,17 @@ async function submitQuery() {
       if (el) el.querySelector('.milestone-dot').className = 'milestone-dot failed';
     }
     addChatMsg(`❌ ${escHtml(err.message)}`, 'assistant');
-    outputContainer.innerHTML = `<div class="output-placeholder" style="color:var(--red)">
-      <div class="ph-icon">⚠️</div><div>${escHtml(err.message)}</div>
-    </div>`;
+    
+    if (responseBlock) {
+      const answerTextDiv = responseBlock.querySelector('.response-answer-text');
+      if (answerTextDiv) {
+        answerTextDiv.innerHTML = `<div style="color:var(--red);">⚠️ Error: ${escHtml(err.message)}</div>`;
+      }
+    } else {
+      outputContainer.innerHTML = `<div class="output-placeholder" style="color:var(--red)">
+        <div class="ph-icon">⚠️</div><div>${escHtml(err.message)}</div>
+      </div>`;
+    }
     notify(err.message, 'error', 8000);
   } finally {
     state.isQuerying = false;
@@ -1073,6 +1143,15 @@ async function submitQuery() {
 // ── Output rendering ───────────────────────────────────────────────────────────
 function renderOutput(mdText) {
   outputContainer.innerHTML = marked.parse(mdText);
+  outputContainer.scrollTop = outputContainer.scrollHeight;
+}
+
+function renderOutputBlock(block, mdText) {
+  if (!block) return;
+  const answerTextDiv = block.querySelector('.response-answer-text');
+  if (answerTextDiv) {
+    answerTextDiv.innerHTML = marked.parse(mdText);
+  }
   outputContainer.scrollTop = outputContainer.scrollHeight;
 }
 

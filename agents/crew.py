@@ -370,6 +370,7 @@ def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_ve
         "tokens_out":   total_completion_tokens,
         "time_seconds": end_time - start_time,
         "carbon_kg":    carbon_kg,
+        "model_name":   getattr(llm, "_last_model_name", None) or llm.model or config.LLM_MODEL_ID,
     }
 
     # Strip any <think>...</think> block Qwen3 may emit

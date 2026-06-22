@@ -1439,3 +1439,62 @@ body.is-mobile #chat-panel {
 body.is-mobile .resizer-handle {
   display: none !important;
 }
+
+/* ── Query History Blocks ────────────────────────────────────────────────── */
+.response-block {
+  position: relative;
+  border-bottom: 1px solid var(--border);
+  padding: 16px 16px 24px 16px;
+  margin-bottom: 16px;
+  animation: fadeSlideUp 0.3s ease;
+}
+.response-block:last-child {
+  border-bottom: none;
+  margin-bottom: 0;
+}
+.response-query {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--accent);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.response-answer-text {
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--text-secondary);
+}
+.response-metrics {
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--text-muted);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+.response-copy-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  cursor: pointer;
+  font-size: 14px;
+  color: var(--text-muted);
+  transition: var(--transition);
+  padding: 4px 8px;
+  border-radius: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.response-copy-btn:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(0, 212, 255, 0.08);
+}
