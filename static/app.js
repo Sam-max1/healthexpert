@@ -538,6 +538,9 @@ async function ingestFiles(files, tier) {
       appendLog(`❌ Upload rejected: ${msg}`);
       notify(`Upload failed: ${msg}`, 'error', 8000);
       diag.error('Ingest API error:', msg);
+      state.isIngesting = false;
+      ingestProgress.style.display = 'none';
+      fileInput.value = '';
       return;
     }
 

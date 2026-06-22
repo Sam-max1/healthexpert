@@ -219,8 +219,12 @@ def get_session_token() -> str:
     if is_admin():
         return "admin"
     token = request.headers.get("X-Session-Token") or request.form.get("session_token")
-    if not token and request.json:
-        token = request.json.get("session_token")
+    if not token and request.is_json:
+        try:
+            req_data = request.get_json(silent=True) or {}
+            token = req_data.get("session_token")
+        except Exception:
+            pass
     if not token:
         token = "anonymous"
     ip = request.remote_addr
@@ -709,26 +713,37 @@ def ingest():
     saved_paths = []
     rejected    = []
 
+    dest_dir = Path(__file__).parent / "kbdocs"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    log.info("Ingest: Storing uploaded files in directory: %s", dest_dir.resolve())
+
     for f in files:
         if not f.filename:
             rejected.append("(unnamed file)")
+            log.warning("Ingest: Rejected an unnamed file upload.")
             continue
+        
+        log.info("Ingest: Filename ingested: %s", f.filename)
+
         if not _allowed(f.filename):
             ext = Path(f.filename).suffix or "(no extension)"
             rejected.append(f"{f.filename} — unsupported type '{ext}'")
-            log.warning("Rejected file %s — extension not in ALLOWED_EXTENSIONS", f.filename)
+            log.warning("Ingest: Rejected file %s — unsupported extension: %s", f.filename, ext)
             continue
-        dest_dir = Path(__file__).parent / "kbdocs"
-        dest_dir.mkdir(parents=True, exist_ok=True)
+
         dest = os.path.join(str(dest_dir), Path(f.filename).name)
         try:
             f.save(dest)
-            file_size = os.path.getsize(dest)
-            log.info("Saved %s → %s  (%d bytes)", f.filename, dest, file_size)
-            saved_paths.append((dest, f.filename))
+            if os.path.exists(dest):
+                file_size = os.path.getsize(dest)
+                log.info("Ingest: Confirmed - File successfully saved to: %s (%d bytes)", os.path.abspath(dest), file_size)
+                saved_paths.append((dest, f.filename))
+            else:
+                log.error("Ingest: Error - File path does not exist after saving to: %s", dest)
+                rejected.append(f"{f.filename} — save check failed")
         except Exception as exc:
             rejected.append(f"{f.filename} — save failed: {exc}")
-            log.error("Failed to save %s: %s", f.filename, exc)
+            log.error("Ingest: Failed to save file %s: %s", f.filename, exc)
 
     if not saved_paths:
         msg = "No valid files found."
@@ -749,10 +764,12 @@ def ingest():
     def _worker(sess_token):
         config.current_session.set(sess_token)
         for path, orig_name in saved_paths:
+            log.info("Ingest: Processing pipeline for %s (Vector + Graph DB)", orig_name)
             res = process_document_pipeline(path, orig_name, tier, token, delete_after=False)
             res["file"] = orig_name
             _jobs[job_id]["results"].append(res)
             _jobs[job_id]["log"].extend(res["log"])
+            log.info("Ingest: Pipeline finished for %s - ok: %s, added: %d chunks", orig_name, res.get("ok"), res.get("added", 0))
 
         _jobs[job_id]["status"] = "done"
         log.info("Job %s complete — %d results", job_id,

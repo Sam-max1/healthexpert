@@ -863,6 +863,9 @@ body.is-mobile #chat-panel {
   justify-content: center;
   z-index: 2000;
 }
+#tier-modal, #captcha-modal {
+  z-index: 3000;
+}
 .modal-card {
   background: var(--bg-secondary);
   border: 1px solid var(--border);
