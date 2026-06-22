@@ -635,15 +635,16 @@ async function pollJobStatus(jobId) {
 // ── Default prompt buttons ─────────────────────────────────────────────────────
 $('preset-gen').addEventListener('click', async () => {
   diag.info('Probing gen_llm server…');
-  notify('Testing Gen LLM server (port 8002)…', 'info', 3000);
+  const llmBackend = (typeof window.getLlmBackend === 'function') ? window.getLlmBackend() : 'local';
+  const llmMode    = (typeof window.getLlmMode === 'function') ? window.getLlmMode() : 'expert';
+  notify(`Testing Gen LLM server (${llmBackend === 'nvidia' ? 'NVIDIA NIM' : 'port 8002'})…`, 'info', 3000);
   const btn = $('preset-gen');
   btn.disabled = true;
   try {
-    const llmBackend = (typeof window.getLlmBackend === 'function') ? window.getLlmBackend() : 'local';
     const r    = await fetch('/api/probe/gen', { 
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ llm_backend: llmBackend })
+      body: JSON.stringify({ llm_backend: llmBackend, llm_mode: llmMode })
     });
     const data = await r.json();
     diag.info('Gen LLM probe result:', data);

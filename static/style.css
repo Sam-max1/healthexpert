@@ -30,7 +30,9 @@ html {
   scroll-behavior: smooth;
 }
 body {
-  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   background: var(--bg-primary);
   color: var(--text-primary);
@@ -39,6 +41,8 @@ body {
 }
 /* Mobile: page scrolls naturally — applied via JS device detection */
 body.is-mobile {
+  display: block;
+  height: auto;
   overflow-x: hidden;
   overflow-y: auto;
 }
@@ -143,13 +147,13 @@ button:focus, input:focus, textarea:focus, select:focus {
 #workspace {
   display: flex;
   flex-direction: row;
-  /* Desktop: fill remaining viewport height (header=60px, resource-banner=36px) */
-  height: calc(100vh - 60px - 36px);
+  flex: 1;
+  min-height: 0;
   gap: 0;
 }
 /* When auto-ingest banner is visible it adds 38px — JS adds this class to body */
 body.ingest-banner-visible #workspace {
-  height: calc(100vh - 60px - 36px - 38px);
+  /* Flex layout automatically handles this size adjustment */
 }
 
 /* ── Mobile Responsiveness ───────────────────────────────────────────────────── */
