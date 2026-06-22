@@ -83,7 +83,7 @@ def _pdf(path: str) -> list[dict]:
 
     Strategy:
     1. Detect and reject Git LFS pointer files before trying to open them.
-    2. Try fast text extraction with fitz (PyMuPDF).
+    2. Try fast text extraction with fitz (PyMuPDF) and scan/extract text from inline images using pytesseract.
     3. If that yields no text, use unstructured.partition_pdf with hi_res strategy
        which automatically triggers OCR for scanned PDFs.
     4. If both fail, return an empty doc (never crashes the pipeline).
@@ -98,9 +98,10 @@ def _pdf(path: str) -> list[dict]:
         )
 
     import fitz  # PyMuPDF
+    import io
+    import warnings
 
     # Suppress MuPDF's own C-level stderr chatter
-    import warnings
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
@@ -110,16 +111,48 @@ def _pdf(path: str) -> list[dict]:
 
     docs = []
     for i, page in enumerate(pdf, 1):
+        # 1. Native text extraction
         text = page.get_text().strip()
+        
+        # 2. Extract and OCR any inline images on this page
+        image_list = page.get_images(full=True)
+        ocr_text_parts = []
+        
+        if image_list:
+            try:
+                import pytesseract
+                from PIL import Image
+                
+                for img_info in image_list:
+                    xref = img_info[0]
+                    base_image = pdf.extract_image(xref)
+                    image_bytes = base_image["image"]
+                    
+                    try:
+                        image = Image.open(io.BytesIO(image_bytes))
+                        ocr_text = pytesseract.image_to_string(image).strip()
+                        if ocr_text:
+                            ocr_text_parts.append(ocr_text)
+                    except Exception:
+                        pass  # Skip individual image extraction failures
+            except ImportError:
+                pass  # pytesseract or PIL not installed — skip inline OCR
+
+        # 3. Combine native text and inline image OCR text
+        if ocr_text_parts:
+            combined_ocr = "\n\n--- [OCR from Embedded Image] ---\n" + "\n\n".join(ocr_text_parts)
+            text = (text + "\n" + combined_ocr).strip()
+
         if text:
             docs.append({"text": text, "metadata": {"page": i}})
+            
     pdf.close()
 
-    # If fitz extraction yielded text, return it
+    # If PyMuPDF text or inline OCR yielded text, return it
     if docs:
         return docs
 
-    # Fallback: Try unstructured with hi_res strategy (includes OCR)
+    # Fallback: Try unstructured with hi_res strategy (includes OCR for fully scanned PDFs)
     try:
         import os
         # Suppress HF Hub auth warning before importing unstructured OCR pipeline
