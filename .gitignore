@@ -125,6 +125,7 @@ dmypy.json
 # HealthExpert specific
 kbdocs/
 uploads/
+app/
 data/chroma_db/
 data/security.key
 *.db
