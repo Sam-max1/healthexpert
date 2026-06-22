@@ -39,8 +39,12 @@ graph TB
         P[(Kuzu\nGraph DB\nTier: Foundation / Extended)]
     end
 
-    subgraph GenLLM["Gen LLM Server — agents/gen_llm.py (port 8002)"]
+    subgraph GenLLM["Local LLM Server — agents/gen_llm.py (port 8002)"]
         Q[transformers AutoModelForCausalLM\nQwen/Qwen2.5-1.5B-Instruct · bfloat16\nPOST /v1/completions\nPOST /v1/kv_cache]
+    end
+
+    subgraph NvidiaLLM["NVIDIA NIM Cloud — agents/nvidia_llm.py (port 8004)"]
+        NVIDIA[NVIDIA API Gateway\nPOST /v1/chat/completions\nDual Mode: Expert / Assistant]
     end
 
     subgraph EmbedLLM["Embed LLM Server — agents/embed_llm.py (port 8003)"]
@@ -55,9 +59,10 @@ graph TB
     H -->|entity extraction| Q --> P
     I -->|use_kv_cache| Q
     K -->|synthesis| Q
+    K -->|synthesis via API| NVIDIA
     K --> C
     F --> O
-    G --> O & P & Q & R
+    G --> O & P & Q & R & NVIDIA
 ```
 
 ---
@@ -166,6 +171,21 @@ sequenceDiagram
 }
 ```
 
+---
+
+### `agents/nvidia_llm.py` — NVIDIA NIM Inference Server (port 8004)
+
+| Item | Value |
+|---|---|
+| **Port** | `8004` |
+| **Model (Expert)** | `google/diffusiongemma-26b-a4b-it` (or specified default) |
+| **Model (Assistant)** | `minimaxai/minimax-m3` |
+| **Backend** | NVIDIA API (`https://integrate.api.nvidia.com`) |
+| **Start** | `python agents/nvidia_llm.py` |
+| **Endpoints** | `GET /health`, `POST /v1/completions` |
+
+This module supports **dual mode routing** (Expert vs Assistant), applying different token limits and temperature profiles depending on the user's frontend selection.
+
 **Health Response:**
 ```json
 {
@@ -218,7 +238,8 @@ sequenceDiagram
 
 | Component | File | Responsibility |
 |---|---|---|
-| **Gen LLM Server** | `agents/gen_llm.py` | Flask :8002 — Jackrong/Qwen3.5-2B Reasoning Distilled GGUF (via llama-cpp), `/v1/completions`, `/health` |
+| **Local LLM Server** | `agents/gen_llm.py` | Flask :8002 — Local GGUF Inference, `/v1/completions`, `/health` |
+| **NVIDIA LLM Server** | `agents/nvidia_llm.py`| Flask :8004 — Cloud NVIDIA NIM Inference, Dual modes, `/v1/completions` |
 | **Embed LLM Server** | `agents/embed_llm.py` | Flask :8003 — BAAI/bge-small-en-v1.5, `/v1/embeddings`, `/health` |
 | Config | `config.py` | All settings; LLM_BASE_URL (8002) + EMBED_BASE_URL (8003); ChromaDB path; override via env vars |
 | Retrieval Pipeline | `agents/crew.py` | Executes DB25 hybrid search + Graph search + CrossEncoder re-ranking + Direct LLM generation |
@@ -395,11 +416,16 @@ pip install -r requirements.txt
 # 3. (Optional) Install tesseract for OCR
 sudo apt-get install -y tesseract-ocr
 
-# 4. Start the Gen LLM server (port 8002)  — in a dedicated terminal
+# 4. Start the Local LLM server (port 8002)  — in a dedicated terminal
 python agents/gen_llm.py
-# → https://127.0.0.1:8002/v1/completions  (Qwen/Qwen2.5-1.5B-Instruct, bfloat16)
+# → https://127.0.0.1:8002/v1/completions
 
-# 5. Start the Embed LLM server (port 8003) — in a dedicated terminal
+# 5. Start the NVIDIA LLM server (port 8004) — in a dedicated terminal
+# Note: Requires NVIDIA_API_KEY environment variable
+python agents/nvidia_llm.py
+# → https://127.0.0.1:8004/v1/completions
+
+# 6. Start the Embed LLM server (port 8003) — in a dedicated terminal
 python agents/embed_llm.py
 # → https://127.0.0.1:8003/v1/embeddings
 
@@ -475,9 +501,10 @@ healthexpert/
 ├── requirements.txt          Python dependencies
 │
 ├── agents/
-│   ├── gen_llm.py            ★ LLM Generation Server (port 8002)
-│   │                             transformers · Qwen/Qwen2.5-1.5B-Instruct · bfloat16
-│   │                             POST /v1/completions · POST /v1/kv_cache
+│   ├── gen_llm.py            ★ Local LLM Generation Server (port 8002)
+│   │                             transformers · bfloat16 · POST /v1/completions
+│   ├── nvidia_llm.py         ★ NVIDIA NIM Generation Server (port 8004)
+│   │                             Cloud API · Dual Mode · POST /v1/completions
 │   ├── embed_llm.py          ★ Embedding Server (port 8003)
 │   │                             FlagEmbedding BGEM3 · BAAI/bge-small-en-v1.5
 │   │                             POST /v1/embeddings · POST /v1/embeddings/multi
