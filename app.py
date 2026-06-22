@@ -1085,16 +1085,25 @@ def probe_gen():
     import requests as req
     data_req = request.get_json(silent=True) or {}
     llm_backend = data_req.get("llm_backend", "local")
+    llm_mode    = data_req.get("llm_mode", "expert")
     
     url = config.LLM_COMPLETIONS_URL
     if llm_backend == "nvidia":
         url = "http://127.0.0.1:8004/v1/completions"
 
     try:
+        payload = {
+            "prompt": "Hello, reply with one sentence.",
+            "max_tokens": 64,
+            "temperature": 0.7,
+            "top_p": 0.9,
+        }
+        if llm_backend == "nvidia":
+            payload["llm_mode"] = llm_mode
+
         r = req.post(
             url,
-            json={"prompt": "Hello, reply with one sentence.", "max_tokens": 64,
-                  "temperature": 0.7, "top_p": 0.9},
+            json=payload,
             timeout=60,
         )
         r.raise_for_status()

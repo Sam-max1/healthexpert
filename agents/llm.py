@@ -21,6 +21,7 @@ class LocalLLM(BaseLLM):
         self.top_p = kwargs.get("top_p", config.LLM_TOP_P)
         self.timeout = kwargs.get("timeout", config.LLM_TIMEOUT)
         self.use_kv_cache = kwargs.get("use_kv_cache", False)
+        self.llm_mode = kwargs.get("llm_mode")
 
     def call(self, messages: list[dict], callbacks: list[Any] | None = None, **kwargs: Any) -> str:
         payload = {
@@ -34,6 +35,8 @@ class LocalLLM(BaseLLM):
             "cpu_threads": kwargs.get("cpu_threads", 2),
             "attachments": [],
         }
+        if hasattr(self, "llm_mode") and self.llm_mode:
+            payload["llm_mode"] = self.llm_mode
         try:
             resp = requests.post(
                 f"{self.base_url}/v1/completions",

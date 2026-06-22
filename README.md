@@ -9,7 +9,6 @@ pinned: false
 ---
 
 # HealthExpert 🏥
-**Version 1.0 Public Release**
 
 ![HealthExpert Admin UI Dashboard](static/screenshot.png)<div align="center">
 
@@ -33,24 +32,25 @@ pinned: false
 
 **HealthExpert** is an enterprise-grade AI document analysis platform combining:
 
-- **🤖 Multi-Agent RAG**: Specialized pipeline spanning Hybrid DBs (Vector + BM25 + Graph)
-- **📱 Nitdaa HF Sibling**: A mobile-friendly MVP UI deployed on HuggingFace Spaces with multi-tenant session isolation. [Launch Application (sam-max1-nitdaa.hf.space)](https://sam-max1-nitdaa.hf.space/)
-- **⚡ High-Speed Ingestion**: Fast local spaCy NER pipeline for automated Kuzu graph construction (no LLM required)
-- **🧠 Reasoning-Distilled Local Models**: Fast edge execution using Llama.cpp and Qwen/Phi tiny models
-- **📥 Dynamic KB Sync**: Auto-syncs private knowledge bases from HuggingFace Datasets on boot
-- **🌐 Web UI**: Real-time streaming responses with detailed metric telemetry
-- **🔐 Production-Ready**: Token-based session tracking, JSON auditing, error handling, and Docker support
+- **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
+- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + BM25) + Graph DB (Kuzu) for comprehensive retrieval
+- **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
+- **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
+- **🌐 Web UI**: Real-time streaming responses with source citations
+- **🔐 Production-Ready**: Error handling, logging, async jobs, and Docker support
 
 ### Key Features
 
 | Feature | Description |
 |---------|-------------|
-| **Hybrid Retrieval** | KV-cache optimization, Vector + Graph + BM25 search fallback |
-| **Mobile Sibling** | Nitdaa Edge UI with responsive design & HuggingFace deployment |
+| **Multi-Agent Processing** | Ingestor, Comprehensive Reader, Gatekeeper, and Analyst agents |
+| **Advanced Retrieval** | KV-cache optimization, vector + graph search fallbacks |
+| **Dual LLM Backend** | Dynamic local (GGUF) vs. NVIDIA NIM backend toggle in the header |
+| **Expert vs Assistant Modes**| Dedicated sub-modes routing to different prompts and model sizes |
+| **Custom Split-Pane Layout** | Visual arrow-handle draggable resizing of the query vs output panels |
 | **Document Support** | 7 file types with automatic format detection |
-| **Real-time Streaming** | SSE-based streaming responses with real-time timers and token telemetry |
-| **Async Processing** | Non-blocking document ingestion with job tracking & HF Dataset sync |
-| **Session Auditing** | `nitdaa_sessions.json` and `nitdaa_summary.json` structured JSON tracking |
+| **Real-time Streaming** | SSE-based streaming responses with source citations |
+| **Async Processing** | Non-blocking document ingestion with job tracking |
 | **Admin Dashboard** | Monitor system status, manage documents, view embeddings |
 | **Docker Ready** | Complete docker-compose setup included |
 
@@ -105,10 +105,10 @@ User Upload
 ┌─────────────────────────────────────────┐
 │ [ChromaDB] Vector Store (embedded)      │
 │ Stores: chunks + embeddings + metadata  │
-│ Search: Dense ANN + BM25                │
+│ Search: BM25 (Dense ANN + BM25 / RRF)   │
 └─────────────────────────────────────────┘
     ↓
-[Entity Extraction] → spaCy Local NER (fast, 0 LLM cost)
+[Entity Extraction] → LLM-powered entity detection
     ↓
 ┌─────────────────────────────────────────┐
 │ [Kuzu] Graph DB                        │
@@ -119,13 +119,15 @@ User Upload
 ### Data Flow: Query Pipeline
 
 ```
-User Query
+User Query + LLM Mode (Expert/Assistant) + Backend (Local/NVIDIA)
     ↓
-[Comprehensive Agent] → Full-document reasoning (KV cache)
+[Retrieval (DB25 + Graph)] → Dual vector & graph retrieval
     ↓
-[Context Verification] → Gatekeeper validates groundedness
+[CrossEncoder Rerank] → Minimizes prompt token budget
     ↓
-[Answer Synthesis] → Analyst generates markdown response
+[LLM Routing] → Selects system prompt and model based on modes
+    ↓
+[Answer Synthesis] → Direct LLM generation bypassing agent loop
     ↓
 [SSE Streaming] → Real-time chunks to UI
     ↓
@@ -444,10 +446,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [CrewAI](https://crewai.com/) - Multi-agent framework
 - [LangChain](https://langchain.com/) - LLM orchestration
 - [ChromaDB](https://www.trychroma.com/) - Embedded vector database
-- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for sparse search
+- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for BM25 hybrid search
 - [Kuzu](https://kuzu.com/) - Graph database
-- [Qwen](https://qwenlm.github.io/) / [Phi-3.5] - Local Edge LLMs
-- [spaCy](https://spacy.io/) - Local Entity Extraction
+- [Qwen](https://qwenlm.github.io/) - LLM models
 - [BAAI BGE](https://github.com/FlagOpen/FlagEmbedding) - Embedding models
 
 ---

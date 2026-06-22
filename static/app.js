@@ -1264,9 +1264,53 @@ async function pollAutoIngestStatus() {
   }
 }
 
+// ── Workspace Resizer drag handler ──────────────────────────────────────────
+function initResizer() {
+  const resizer = document.getElementById('workspace-resizer');
+  const chatPanel = document.getElementById('chat-panel');
+  const workspace = document.getElementById('workspace');
+
+  if (!resizer || !chatPanel || !workspace) return;
+
+  let isDragging = false;
+
+  resizer.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    resizer.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    const workspaceRect = workspace.getBoundingClientRect();
+    const newChatWidth = e.clientX - workspaceRect.left;
+    
+    // Bounds check
+    const minWidth = 320;
+    const maxWidth = workspaceRect.width - 320;
+    
+    if (newChatWidth >= minWidth && newChatWidth <= maxWidth) {
+      chatPanel.style.width = `${newChatWidth}px`;
+      chatPanel.style.flex = 'none'; // Overrides flex-basis / grow
+    }
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      resizer.classList.remove('dragging');
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    }
+  });
+}
+
 // ── Init ───────────────────────────────────────────────────────────────────────
 (async () => {
   diag.info('App initialising…');
+  initResizer();
   await refreshStatus();
   await loadDocuments();
   await pollSysInfo();           // Initial resource banner population

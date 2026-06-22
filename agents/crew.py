@@ -186,9 +186,11 @@ def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_ve
         llm = LocalLLM(
             model=config.LLM_MODEL_ID,
             base_url=config.NVIDIA_BASE_URL,
+            llm_mode=llm_mode,
         )
     else:
         llm = _get_llm()  # reuse module-level singleton — zero construction overhead
+        llm.llm_mode = llm_mode
 
     # ── Phase 1: Retrieval (no LLM — pure vector + graph search) ─────────────
     if status_callback:
@@ -332,10 +334,16 @@ def run_query_crew(query: str, top_k: int = None, max_tokens: int = None, use_ve
         status_callback("analysis")
 
     # Disabled system_prompt.md for performance testing
-    system_prompt_content = (
-        "You are an expert Information Analyst. Answer the user's question using ONLY the provided CONTEXT. "
-        "Do not hallucinate facts or use outside knowledge."
-    )
+    if llm_mode == "assistant":
+        system_prompt_content = (
+            "You are a friendly and helpful Health Insurance Assistant. Answer the user's question politely "
+            "and conversationally using ONLY the provided CONTEXT. Do not hallucinate facts or use outside knowledge."
+        )
+    else:
+        system_prompt_content = (
+            "You are an expert Information Analyst. Answer the user's question using ONLY the provided CONTEXT. "
+            "Do not hallucinate facts or use outside knowledge."
+        )
 
     user_prompt = (
         f"CONTEXT:\n{context_output}\n\n"

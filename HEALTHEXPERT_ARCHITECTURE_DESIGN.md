@@ -116,9 +116,9 @@ sequenceDiagram
     participant CR as CrossEncoder Reranker
     participant GS as gen_llm.py :8002
 
-    U->>F: POST /api/query { query, X-Session-Token }
+    U->>F: POST /api/query { query, llm_mode, llm_backend, X-Session-Token }
     F-->>U: SSE stream open
-    F->>RP: run_query_crew(query)
+    F->>RP: run_query_crew(query, llm_mode, llm_backend)
     
     %% Phase 1
     RP->>RP: Embed Query via embedder
@@ -184,7 +184,9 @@ sequenceDiagram
 | **Start** | `python agents/nvidia_llm.py` |
 | **Endpoints** | `GET /health`, `POST /v1/completions` |
 
-This module supports **dual mode routing** (Expert vs Assistant), applying different token limits and temperature profiles depending on the user's frontend selection.
+This module supports **dual mode routing** (Expert vs Assistant) by dynamically selecting the model based on `llm_mode` passed from the client:
+- **Expert Mode**: Routes to a high-capacity model (e.g., `google/diffusiongemma-26b-a4b-it`) with a longer token budget, reasoning configurations, and specialized system prompt.
+- **Assistant Mode**: Routes to a fast, conversational model (e.g., `minimaxai/minimax-m3`) with a larger context budget and a friendly, conversational system prompt.
 
 **Health Response:**
 ```json
@@ -242,16 +244,16 @@ This module supports **dual mode routing** (Expert vs Assistant), applying diffe
 | **NVIDIA LLM Server** | `agents/nvidia_llm.py`| Flask :8004 — Cloud NVIDIA NIM Inference, Dual modes, `/v1/completions` |
 | **Embed LLM Server** | `agents/embed_llm.py` | Flask :8003 — BAAI/bge-small-en-v1.5, `/v1/embeddings`, `/health` |
 | Config | `config.py` | All settings; LLM_BASE_URL (8002) + EMBED_BASE_URL (8003); ChromaDB path; override via env vars |
-| Retrieval Pipeline | `agents/crew.py` | Executes DB25 hybrid search + Graph search + CrossEncoder re-ranking + Direct LLM generation |
+| Retrieval Pipeline | `agents/crew.py` | Executes DB25 hybrid search + Graph search + CrossEncoder re-ranking + Direct LLM generation (with dynamic Expert vs Assistant prompt routing) |
 | Document Loader | `pipeline/document_loader.py` | Parse 9 file formats; OCR for images |
 | Chunker | `pipeline/chunker.py` | Recursive splitting (langchain_text_splitters), flat chunk dicts |
 | Vector Store | `pipeline/vector_store.py` | **ChromaDB** CRUD, **DB25 hybrid search** (Dense + BM25), tier support |
 | Graph Store | `pipeline/graph_store.py` | Kuzu CRUD, OPTIONAL MATCH, tier support |
 | Flask App | `app.py` | REST API + Docker control + Tier Access Admin Auth + KV trigger + Health Metrics + Headless v1 API |
 | CLI | `healthexpert.py` | Standalone command-line interface |
-| UI Template | `templates/index.html` | Three-panel SPA + Docker buttons + preset prompts + diagnostic log |
-| Styles | `static/style.css` | Dark glassmorphism + Docker modal + log box + preset btn styles |
-| JavaScript | `static/app.js` | Fetch/SSE + diag logger + Docker control + probe handlers |
+| UI Template | `templates/index.html` | Custom-resizable split-pane SPA + Ingest modal + preset prompts + diagnostic log |
+| Styles | `static/style.css` | Dark glassmorphism design with custom draggable split-pane resizer styling |
+| JavaScript | `static/app.js` | Fetch/SSE + diag logger + Docker control + probe handlers + custom mouse drag-to-resize listener |
 | Test Doc | `HEALTHEXPERT_UNIT_INTEGRATION_TEST.md` | 12-suite test spec with runnable commands |
 
 ---
