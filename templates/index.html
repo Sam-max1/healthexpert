@@ -551,6 +551,10 @@ if (_backendLocal && _backendNvidia) {
     if (_modeToggleContainer) {
       _modeToggleContainer.style.display = (b === 'nvidia') ? 'flex' : 'none';
     }
+    const statusGenLabel = document.querySelector('#status-gen .status-label');
+    if (statusGenLabel) {
+      statusGenLabel.textContent = b === 'nvidia' ? 'Gen LLM (Nvidia)' : 'Gen LLM (Local)';
+    }
   }
   _backendLocal.addEventListener('click',  () => _setBackend('local'));
   _backendNvidia.addEventListener('click', () => _setBackend('nvidia'));

@@ -1083,9 +1083,16 @@ def ingest_v1_sync():
 def probe_gen():
     """Quick smoke-test for the gen_llm server."""
     import requests as req
+    data_req = request.get_json(silent=True) or {}
+    llm_backend = data_req.get("llm_backend", "local")
+    
+    url = config.LLM_COMPLETIONS_URL
+    if llm_backend == "nvidia":
+        url = "http://127.0.0.1:8004/v1/completions"
+
     try:
         r = req.post(
-            config.LLM_COMPLETIONS_URL,
+            url,
             json={"prompt": "Hello, reply with one sentence.", "max_tokens": 64,
                   "temperature": 0.7, "top_p": 0.9},
             timeout=60,

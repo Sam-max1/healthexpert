@@ -639,7 +639,12 @@ $('preset-gen').addEventListener('click', async () => {
   const btn = $('preset-gen');
   btn.disabled = true;
   try {
-    const r    = await fetch('/api/probe/gen', { method: 'POST' });
+    const llmBackend = (typeof window.getLlmBackend === 'function') ? window.getLlmBackend() : 'local';
+    const r    = await fetch('/api/probe/gen', { 
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ llm_backend: llmBackend })
+    });
     const data = await r.json();
     diag.info('Gen LLM probe result:', data);
     if (data.ok) {
