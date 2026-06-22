@@ -804,8 +804,8 @@ def query():
     top_k = (data or {}).get("top_k")
     max_tokens = (data or {}).get("max_tokens")
     use_vector = (data or {}).get("use_vector", True)
-    use_graph = False
-    use_bm25 = False
+    use_graph  = bool((data or {}).get("use_graph", True))
+    use_bm25   = bool((data or {}).get("use_bm25", True))
     use_gpu = bool((data or {}).get("use_gpu", False))
     cpu_threads = int((data or {}).get("cpu_threads", 2))
     llm_mode    = (data or {}).get("llm_mode",    "expert")   # F4: expert/assistant
@@ -876,8 +876,8 @@ def query_start():
     top_k = (data or {}).get("top_k")
     max_tokens = (data or {}).get("max_tokens")
     use_vector = (data or {}).get("use_vector", True)
-    use_graph = False
-    use_bm25 = False
+    use_graph  = bool((data or {}).get("use_graph", True))
+    use_bm25   = bool((data or {}).get("use_bm25", True))
     use_gpu = bool((data or {}).get("use_gpu", False))
     cpu_threads = int((data or {}).get("cpu_threads", 2))
     llm_mode    = (data or {}).get("llm_mode",    "expert")   # F4: expert/assistant

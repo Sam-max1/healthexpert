@@ -70,6 +70,9 @@ const notifContainer  = $('notif-container');
 const dockerModal     = $('docker-modal');
 const dockerModalTitle= $('docker-modal-title');
 const dockerModalBody = $('docker-modal-body');
+const ingestModalBtn  = $('ingest-modal-btn');
+const ingestPanelModal= $('ingest-panel-modal');
+const ingestPanelClose= $('ingest-panel-close');
 
 // ── Notifications ──────────────────────────────────────────────────────────────
 function notify(msg, type = 'info', duration = 5000) {
@@ -480,6 +483,25 @@ fileInput.addEventListener('change', () => {
   openTierModal(files);
 });
 
+// ── Ingest Panel Modal Logic ────────────────────────────────────────────────
+if (ingestModalBtn) {
+  ingestModalBtn.addEventListener('click', () => {
+    if (ingestPanelModal) ingestPanelModal.style.display = 'flex';
+  });
+}
+if (ingestPanelClose) {
+  ingestPanelClose.addEventListener('click', () => {
+    if (ingestPanelModal) ingestPanelModal.style.display = 'none';
+  });
+}
+// Close on overlay click
+if (ingestPanelModal) {
+  ingestPanelModal.addEventListener('click', (e) => {
+    if (e.target === ingestPanelModal) {
+      ingestPanelModal.style.display = 'none';
+    }
+  });
+}
 // ── Ingestion ──────────────────────────────────────────────────────────────────
 async function ingestFiles(files, tier) {
   if (!files.length) {

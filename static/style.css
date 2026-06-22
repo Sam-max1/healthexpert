@@ -141,8 +141,8 @@ button:focus, input:focus, textarea:focus, select:focus {
 
 /* ── Layout ─────────────────────────────────────────────────────────────────── */
 #workspace {
-  display: grid;
-  grid-template-columns: 320px 1fr 420px;
+  display: flex;
+  flex-direction: row;
   /* Desktop: fill remaining viewport height (header=60px, resource-banner=36px) */
   height: calc(100vh - 60px - 36px);
   gap: 0;
@@ -154,15 +154,15 @@ body.ingest-banner-visible #workspace {
 
 /* ── Mobile Responsiveness ───────────────────────────────────────────────────── */
 
-/* ── Tablet (≤1200px): 2-column layout ─────────────────────────────────────── */
+/* ── Tablet (≤1200px): Flex column override ───────────────────────────────── */
 @media (max-width: 1200px) {
   #workspace {
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto;
+    flex-direction: column;
   }
-  #ingest-panel  { grid-column: 1;     grid-row: 1; }
-  #chat-panel    { grid-column: 2;     grid-row: 1 / 3; }
-  #output-panel  { grid-column: 1 / 3; grid-row: 2; }
+  #chat-panel {
+    resize: none !important;
+    max-width: none !important;
+  }
 }
 
 /* ── Mobile (≤768px): Full single-column, long scrollable page ──────────────── */
@@ -179,11 +179,11 @@ body.is-mobile #workspace,
   }
 }
 
-body.is-mobile #ingest-panel,
 body.is-mobile #chat-panel,
 body.is-mobile #output-panel {
-  grid-column: 1;
-  grid-row: auto;
+  flex: none;
+  width: 100% !important;
+  resize: none !important;
   /* Allow each panel to be as tall as its content, min 400px for usability */
   height: auto;
   min-height: 400px;
@@ -212,11 +212,11 @@ body.is-mobile #chat-panel {
     overflow: visible;
   }
 
-  #ingest-panel,
   #chat-panel,
   #output-panel {
-    grid-column: 1;
-    grid-row: auto;
+    flex: none;
+    width: 100% !important;
+    resize: none !important;
     height: auto;
     min-height: 400px;
     overflow: visible;
@@ -417,6 +417,11 @@ body.is-mobile #chat-panel {
 /* ── Center: Chat Panel ─────────────────────────────────────────────────────── */
 #chat-panel {
   background: var(--bg-secondary);
+  flex: 1 1 50%;
+  resize: horizontal;
+  overflow: hidden; /* Needed for CSS resize to work */
+  min-width: 320px;
+  max-width: 80vw;
 }
 
 #chat-history {
@@ -567,6 +572,10 @@ body.is-mobile #chat-panel {
 #send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
 
 /* ── Output Panel ───────────────────────────────────────────────────────────── */
+#output-panel {
+  flex: 1 1 50%;
+  min-width: 320px;
+}
 #output-panel .panel-body {
   display: flex;
   flex-direction: column;
@@ -1352,7 +1361,7 @@ body.is-mobile #chat-panel {
   transition: background 0.2s, color 0.2s;
 }
 .mode-btn.active {
-  background: var(--blue);
+  background: var(--accent);
   color: #fff !important;   /* force white — fixes text vanishing on dark/light themes */
 }
 /* F24: Backend toggle — Local (green) / NVIDIA (violet) */
