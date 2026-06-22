@@ -791,7 +791,10 @@ function addThinkingMsg(qId) {
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-ranking-${qId}">
             <div class="milestone-dot"></div>
-            <span>Cross-Encoder Reranking <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+            <div>
+              <span>Cross-Encoder Reranking <span class="milestone-timer" data-time="0">(0.0s)</span></span>
+              <div class="milestone-chunks"></div>
+            </div>
           </div>
           <div class="milestone-line"></div>
           <div class="milestone" id="ms-analysis-${qId}">
@@ -1003,10 +1006,15 @@ async function submitQuery() {
             if (payload.status === 'graph') targetMs = msGraph;
             if (payload.status === 'vector') targetMs = msVector;
             if (payload.status === 'bm25') targetMs = msBm25;
+            if (payload.status === 'reranking') targetMs = msRanking;
             if (targetMs) {
               const chunkDiv = targetMs.querySelector('.milestone-chunks');
               if (chunkDiv) {
-                chunkDiv.innerText = `${payload.chunks} chunk(s) retrieved`;
+                if (payload.status === 'reranking') {
+                  chunkDiv.innerText = `${payload.chunks} chunk(s) sent to LLM`;
+                } else {
+                  chunkDiv.innerText = `${payload.chunks} chunk(s) retrieved`;
+                }
                 chunkDiv.classList.add('visible');
               }
             }

@@ -135,7 +135,7 @@ def synthesize_answer(context_and_query: str) -> str:
         "1. STRICT GROUNDING: You must not use any external knowledge. If the information is not present in the context, do not hallucinate or make assumptions.\n"
         "2. ZERO RETRIEVAL GUARDRAIL: If the provided context is empty, irrelevant, or does not contain the answer, you must output EXACTLY and ONLY this sentence:\n"
         "'Internal data does not have any information to answer the question.'\n"
-        "3. FORMAT: If you can answer the question based on the context, format your response in Markdown with a clear structure, bullet points for key facts, source citations like [Source: filename], and a 'Summary' section at the end.\n\n"
+        "3. FORMAT: If you can answer the question based on the context, format your response in Markdown with a clear structure, bullet points for key facts, source citations like [Source: filename], and a 'Summary' section at the end. Add relevant emojis in the output.\n\n"
         f"CONTEXT:\n{context}\n\n"
         f"QUESTION: {query}\n\n"
         "ANSWER:"
