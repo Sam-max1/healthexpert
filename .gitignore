@@ -191,6 +191,32 @@ Thumbs.db
 # Graph Database
 data/kuzu_db/
 
-# Excluded Strategic Documents
+# Excluded Strategic / Non-operational Documents
 docs/
-!docs/HEALTHEXPERT_USER_GUIDE.md
+CHANGELOG.md
+CODE_OF_CONDUCT.md
+CONTRIBUTING.md
+SECURITY.md
+HEALTHEXPERT_ARCHITECTURE_DESIGN.md
+HEALTHEXPERT_UNIT_INTEGRATION_TEST.md
+TEST_EXECUTION_REPORT.md
+UPGRADE_SUMMARY.md
+
+# Ad-hoc dev/debug scripts (root-level)
+test_llama.py
+test_long_context.py
+test_loop.py
+test_rope.py
+test_threads.py
+
+# Redundant requirements
+requirements_gpu.txt
+
+# Personal utility scripts
+scripts/sync_hf_dataset.py
+scripts/test_hf_docker.sh
+
+# Duplicate / placeholder images
+images/demo-screenshot.png
+images/screenshot.png
+static/screenshot.png
