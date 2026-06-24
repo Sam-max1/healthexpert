@@ -89,7 +89,7 @@ from huggingface_hub import HfApi, hf_hub_download
 limiter = Limiter(
     get_remote_address,
     app=app,
-    default_limits=["200 per day", "10 per minute"],
+    default_limits=["10000 per day", "200 per minute"],
     storage_uri="memory://"
 )
 
