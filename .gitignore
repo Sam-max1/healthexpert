@@ -213,7 +213,6 @@ requirements_gpu.txt
 scripts/sync_hf_dataset.py
 scripts/test_hf_docker.sh
 
-# Duplicate / placeholder images
-images/demo-screenshot.png
-images/screenshot.png
+# Duplicate / placeholder images + binary images folder (HF Spaces rejects non-LFS binaries)
+images/
 static/screenshot.png
