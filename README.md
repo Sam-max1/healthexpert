@@ -10,459 +10,150 @@ pinned: false
 
 # HealthExpert 🏥
 
-![HealthExpert Admin UI Dashboard](static/screenshot.png)<div align="center">
+<div align="center">
 
 [![Python 3.10+](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python&logoColor=white)](https://www.python.org/)
 [![Flask](https://img.shields.io/badge/Flask-3.0%2B-green?logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![CrewAI](https://img.shields.io/badge/CrewAI-0.36%2B-orange?logo=robot&logoColor=white)](https://crewai.com/)
 [![License](https://img.shields.io/badge/License-MIT-purple)](LICENSE)
-[![Status](https://img.shields.io/badge/Status-Production%20Ready-brightgreen)](https://github.com/Sam-max1/healthexpert)
-
-**AI-Powered Hybrid RAG Document Analysis System**
-
-*Intelligent document ingestion, retrieval, and analysis using CrewAI agents with Vector & Graph databases*
-
-[🚀 Quick Start](#quick-start) • [📚 Documentation](#documentation) • [🏗️ Architecture](#architecture) • [🤝 Contributing](#contributing)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-HuggingFace%20Space-ff69b4?logo=huggingface)](https://sam-max1-healthexpert.hf.space/)
+[![GitHub Stars](https://img.shields.io/github/stars/Sam-max1/healthexpert?style=social)](https://github.com/Sam-max1/healthexpert)
 
 </div>
 
----
+<p align="center">
+  <img src="images/gh-demo.png" alt="HealthExpert interface preview" width="100%" />
+</p>
 
-## 🌟 Overview
+HealthExpert is an AI-powered document intelligence platform that turns PDFs, Word files, spreadsheets, and other business documents into grounded answers with citations, retrieval context, and a polished web experience. The project is live and ready to try at <a href="https://sam-max1-healthexpert.hf.space/">https://sam-max1-healthexpert.hf.space/</a>.
 
-**HealthExpert** is an enterprise-grade AI document analysis platform combining:
+> ⭐ If this project helps you, please give it a star. It helps the project grow and reach more users.
 
-- **🤖 CrewAI Multi-Agent System**: Specialized agents for ingestion, verification, and analysis
-- **🔍 Hybrid RAG Architecture**: Vector DB (ChromaDB + BM25) + Graph DB (Kuzu) for comprehensive retrieval
-- **📄 Multi-Format Support**: PDF, DOCX, XLSX, CSV, TXT, and Image files (OCR)
-- **⚡ Microservice Architecture**: Dedicated LLM generation and embedding servers
-- **🌐 Web UI**: Real-time streaming responses with source citations
-- **🔐 Production-Ready**: Error handling, logging, async jobs, and Docker support
+## Why HealthExpert?
 
-### Key Features
+HealthExpert combines retrieval-augmented generation, graph-based reasoning, and a production-friendly Flask UI to help users ask questions over large document collections without losing provenance. It is designed for teams that want fast, explainable answers from internal knowledge sources while keeping the experience simple for end users.
 
-| Feature | Description |
-|---------|-------------|
-| **Multi-Agent Processing** | Ingestor, Comprehensive Reader, Gatekeeper, and Analyst agents |
-| **Advanced Retrieval** | KV-cache optimization, vector + graph search fallbacks |
-| **Dual LLM Backend** | Dynamic local (GGUF) vs. NVIDIA NIM backend toggle in the header |
-| **Expert vs Assistant Modes**| Dedicated sub-modes routing to different prompts and model sizes |
-| **Custom Split-Pane Layout** | Visual arrow-handle draggable resizing of the query vs output panels |
-| **Document Support** | 7 file types with automatic format detection |
-| **Real-time Streaming** | SSE-based streaming responses with source citations |
-| **Async Processing** | Non-blocking document ingestion with job tracking |
-| **Admin Dashboard** | Monitor system status, manage documents, view embeddings |
-| **Docker Ready** | Complete docker-compose setup included |
+### What it can do
 
----
+- Ingest and index documents in PDF, DOCX, XLSX, CSV, TXT, PNG, JPG, JPEG, and WEBP formats
+- Extract text, chunk content, embed it, and store it in a hybrid retrieval stack
+- Combine dense vector retrieval, BM25 keyword retrieval, and graph-based entity relationships
+- Generate grounded answers with source-aware citations and streaming output
+- Run as a local app, a Dockerized service, or a Hugging Face Space
+- Expose both a web UI and a CLI for ingestion, querying, and system inspection
+- Support admin controls, async ingestion jobs, session-aware workflows, and Hugging Face optimized mode
 
-## 🏗️ Architecture
+## Featured capabilities
 
-### System Design
+- Multi-agent ingestion and analysis pipeline powered by CrewAI
+- Hybrid RAG with ChromaDB, BM25 ranking, and Kuzu graph search
+- Local and NVIDIA-backed LLM routing with expert/assistant modes
+- Real-time streaming responses in the web UI
+- Secure, rate-limited Flask API with admin monitoring endpoints
+- CLI utilities for ingesting documents and checking system health
+- Docker and Hugging Face Space deployment support
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Flask Web UI (port 5050)                │
-│         Document Ingestion • Query • Output Rendering      │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│               Flask REST API (app.py)                       │
-│  POST /api/ingest  │  POST /api/query  │  GET /api/status  │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-┌────────────────────▼────────────────────────────────────────┐
-│            CrewAI Agent Layer (agents/crew.py)             │
-│  • Ingestor Agent      → Document loading & chunking       │
-│  • Comprehensive Agent → Full-document reasoning (KV cache)│
-│  • Gatekeeper Agent    → Context verification              │
-│  • Analyst Agent       → Answer synthesis                   │
-└────────────────────┬────────────────────────────────────────┘
-                     │
-     ┌───────────────┼───────────────┐
-     │               │               │
-┌────▼────┐ ┌───────▼────┐ ┌────────▼──────┐
-│ Pipeline│ │  LLM Srvr  │ │ Embed Server │
-│  Data   │ │ :8002      │ │    :8003     │
-│Processing│ │Qwen2.5-1.5B-Instruct    │ │ BAAI/bge-small-en-v1.5  │
-└────┬────┘ └───────────┘ └──────────────┘
-     │
-     ├─→ ChromaDB (Vector Store, embedded, BM25 hybrid search)
-     └─→ Kuzu (Graph DB)
+## System flow
+
+```mermaid
+flowchart TD
+    A[User uploads a document] --> B[Document loader and parser]
+    B --> C[Chunking and embedding]
+    C --> D[ChromaDB vector store]
+    C --> E[Kuzu knowledge graph]
+    D --> F[Hybrid retrieval: vector + BM25]
+    E --> F
+    F --> G[Context verification and reranking]
+    G --> H[LLM answer synthesis]
+    H --> I[Streaming response with citations]
 ```
 
-### Data Flow: Ingestion Pipeline
+## Architecture at a glance
 
-```
-User Upload
-    ↓
-[Document Loader] → Extract text (PDF, DOCX, XLSX, CSV, TXT, OCR)
-    ↓
-[Chunker] → Split into 512-token chunks (64 overlap)
-    ↓
-[Embedder] → Generate dense/sparse embeddings (BAAI/bge-small-en-v1.5)
-    ↓
-┌─────────────────────────────────────────┐
-│ [ChromaDB] Vector Store (embedded)      │
-│ Stores: chunks + embeddings + metadata  │
-│ Search: BM25 (Dense ANN + BM25 / RRF)   │
-└─────────────────────────────────────────┘
-    ↓
-[Entity Extraction] → LLM-powered entity detection
-    ↓
-┌─────────────────────────────────────────┐
-│ [Kuzu] Graph DB                        │
-│ Stores: entities + relationships        │
-└─────────────────────────────────────────┘
-```
+HealthExpert is organized around three layers:
 
-### Data Flow: Query Pipeline
+1. Frontend and API layer: Flask routes, session handling, streaming UI, and admin controls
+2. Retrieval and knowledge layer: document parsing, chunking, embeddings, ChromaDB, BM25, and Kuzu
+3. Inference layer: generation and embedding microservices plus optional NVIDIA backend support
 
-```
-User Query + LLM Mode (Expert/Assistant) + Backend (Local/NVIDIA)
-    ↓
-[Retrieval (DB25 + Graph)] → Dual vector & graph retrieval
-    ↓
-[CrossEncoder Rerank] → Minimizes prompt token budget
-    ↓
-[LLM Routing] → Selects system prompt and model based on modes
-    ↓
-[Answer Synthesis] → Direct LLM generation bypassing agent loop
-    ↓
-[SSE Streaming] → Real-time chunks to UI
-    ↓
-User sees answer with source citations
-```
+## Live demo
 
----
+Try the hosted experience here:
 
-## 🚀 Quick Start
+- Hugging Face Space: https://sam-max1-healthexpert.hf.space/
+
+## Quick start
 
 ### Prerequisites
 
 - Python 3.10+
-- Docker & Docker Compose (optional)
-- 8GB+ RAM recommended
-- CUDA/ROCm support (optional, for GPU acceleration)
+- Docker and Docker Compose optional
+- 8 GB RAM recommended
+- CUDA or ROCm optional for accelerated local inference
 
-### Installation
-
-#### 1. Clone Repository
+### Install and run locally
 
 ```bash
 git clone https://github.com/Sam-max1/healthexpert.git
 cd healthexpert
-```
-
-#### 2. Set Up Python Environment
-
-```bash
-# Create virtual environment
 python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
-
-# Install dependencies
+source venv/bin/activate
 pip install -r requirements.txt
-
-# Set HuggingFace token for private KB document syncing
-export HF_PRIVATE_TOKEN=$(secret-tool lookup api huggingface)
 ```
 
-#### 3. Start Microservices
+Start the services:
 
-**Terminal 1 - LLM Generation Server (port 8002):**
 ```bash
 python agents/gen_llm.py
-# Expected output:
-# * Running on http://127.0.0.1:8002
-```
-
-**Terminal 2 - Embedding Server (port 8003):**
-```bash
 python agents/embed_llm.py
-# Expected output:
-# * Running on http://127.0.0.1:8003
-```
-
-**Terminal 3 - Main Flask App (port 5050):**
-```bash
 python app.py
-# Expected output:
-# * Running on http://127.0.0.1:5050
 ```
 
-#### 4. Access Web UI
+Open the app at http://localhost:5050.
 
-Open your browser: **http://localhost:5050**
-
-### Using Docker Compose
+### CLI usage
 
 ```bash
-# Start all services
-# Ensure HF_PRIVATE_TOKEN is set in your environment or .env file before running
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop services
-docker-compose down
-```
-
-### CLI Usage
-
-```bash
-# Ingest a document
 python healthexpert.py ingest path/to/document.pdf
-
-# Query documents
 python healthexpert.py query "What is the main topic?"
-
-# List ingested documents
 python healthexpert.py list
-
-# Check system status
 python healthexpert.py status
-
-# Clear all documents
-python healthexpert.py clear
+python healthexpert.py clear your-document.pdf
 ```
 
----
+## Project structure
 
-## 📚 Documentation
-
-### Project Structure
-
-```
+```text
 healthexpert/
-├── app.py                                    # Flask REST API
-├── config.py                                 # Configuration (env-based)
-├── healthexpert.py                           # CLI interface
-├── requirements.txt                          # Python dependencies
-├── docker-compose.yml                        # Docker setup
-│
-├── agents/                                   # CrewAI agents
-│   ├── crew.py                              # Crew orchestration
-│   ├── llm.py                               # LLM integration
-│   ├── tools.py                             # Agent tools
-│   ├── gen_llm.py                           # LLM generation server (port 8002)
-│   └── embed_llm.py                         # Embedding server (port 8003)
-│
-├── pipeline/                                # Data processing
-│   ├── document_loader.py                   # Multi-format document loader
-│   ├── chunker.py                           # Text chunking (512 tokens)
-│   ├── embedder.py                          # Embedding HTTP client
-│   ├── vector_store.py                      # ChromaDB + BM25 hybrid search
-│   └── graph_store.py                       # Kuzu integration
-│
-├── templates/                               # Web UI (HTML)
-│   └── index.html                           # Main interface
-│
-├── static/                                  # Frontend assets
-│   ├── app.js                               # WebSocket + SSE handling
-│   └── style.css                            # UI styling
-│
-└── data/                                    # Runtime data
-    ├── security.key                         # Fernet key (local-only)
-    └── uploads/                             # Uploaded documents
+├── app.py                  # Flask web app and API routes
+├── healthexpert.py         # CLI entry point
+├── config.py               # Runtime configuration
+├── agents/                 # LLM, crew, and service orchestration
+├── pipeline/               # Loader, chunker, embeddings, and storage
+├── templates/              # HTML UI templates
+├── static/                 # JS and CSS assets
+├── docker-compose.yml      # Optional container deployment
+└── requirements*.txt       # Dependency sets for local and HF deployments
 ```
 
-### Environment Configuration
+## Development notes
 
-Create `.env` file to override defaults:
+- Run tests with pytest from the repository root
+- Use Docker Compose for local database and service orchestration
+- Set HF_PRIVATE_TOKEN when using private Hugging Face-backed workflows
 
-```env
-# LLM Generation Server (port 8002)
-LLM_BASE_URL=http://127.0.0.1:8002
-HF_PRIVATE_TOKEN=your_huggingface_token_here
-LLM_MODEL_ID=Qwen/Qwen2.5-1.5B-Instruct
-LLM_MAX_TOKENS=2048
-LLM_TEMPERATURE=0.7
-LLM_TOP_P=0.9
-LLM_TIMEOUT=600
+## Contributing
 
-# Embedding Server (port 8003)
-EMBED_BASE_URL=http://127.0.0.1:8003
-EMBEDDING_MODEL=BAAI/bge-small-en-v1.5
-EMBEDDING_BATCH_SIZE=12
-EMBEDDING_TIMEOUT=120
+Contributions are welcome. Please open an issue or pull request if you want to improve the app, add new document formats, or refine the retrieval pipeline.
 
-# Vector Database (ChromaDB — embedded, no server required)
-CHROMA_PERSIST_DIR=./data/chroma_db
-CHROMA_COLLECTION=Document
-ENCRYPTION_KEY_FILE=./data/security.key
+## License
 
-# Kuzu
-KUZU_URI=bolt://localhost:7687
-KUZU_USER=kuzu
-KUZU_PASSWORD=healthexpert
-
-# Flask
-UPLOAD_FOLDER=./uploads
-SECRET_KEY=your-secret-key-here
-CHUNK_SIZE=512
-CHUNK_OVERLAP=64
-```
-
-### API Endpoints
-
-#### Ingestion
-
-**POST /api/ingest**
-```bash
-curl -X POST -F "file=@document.pdf" http://localhost:5050/api/ingest
-
-# Response:
-# { "job_id": "abc-123", "status": "processing" }
-```
-
-#### Query
-
-**POST /api/query**
-```bash
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"query":"What is the main topic?"}' \
-  http://localhost:5050/api/query
-
-# Returns: Server-Sent Events stream
-```
-
-#### Status
-
-**GET /api/ingest/status/<job_id>**
-```bash
-curl http://localhost:5050/api/ingest/status/abc-123
-```
-
----
-
-## 🔧 Development
-
-### Running Tests
-
-```bash
-# Run integration tests
-python -m pytest HEALTHEXPERT_UNIT_INTEGRATION_TEST.md -v
-
-# Run specific agent test
-python -m pytest agents/test_agents.py -v
-```
-
-### Code Style
-
-```bash
-# Format code
-black healthexpert/ agents/ pipeline/
-
-# Lint
-flake8 healthexpert/ agents/ pipeline/ --max-line-length=100
-```
-
-### Debugging
-
-Enable debug logging:
-
-```bash
-export LOG_LEVEL=DEBUG
-python app.py
-```
-
-View logs:
-
-```bash
-tail -f logs/app.log
-```
-
----
-
-## 🤝 Contributing
-
-We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-### How to Contribute
-
-1. **Fork** the repository
-2. **Create** a feature branch (`git checkout -b feature/amazing-feature`)
-3. **Commit** changes (`git commit -m 'Add amazing feature'`)
-4. **Push** to branch (`git push origin feature/amazing-feature`)
-5. **Open** a Pull Request
-
-### Development Setup
-
-```bash
-# Clone fork
-git clone https://github.com/YOUR_USERNAME/healthexpert.git
-
-# Create development environment
-python -m venv venv_dev
-source venv_dev/bin/activate
-pip install -r requirements.txt
-
-# Install dev tools
-pip install pytest black flake8
-
-# Run tests
-pytest tests/
-```
-
----
-
-## 📋 Roadmap
-
-- [x] Multi-agent RAG pipeline
-- [x] Web UI with streaming responses
-- [x] Docker containerization
-- [x] Hybrid vector+graph retrieval
-- [ ] Advanced metrics dashboard
-- [ ] Multi-language support
-- [ ] Fine-tuned domain models
-- [ ] Enterprise auth (OAuth2, SAML)
-- [ ] Prompt versioning
-- [ ] Batch processing API
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
----
-
-## 👨‍💻 Author
-
-**Sam-max1**
-
-<div align="center">
-
-### 🌟 If you find this project helpful, please consider giving it a star! ⭐
-
-</div>
-
----
-
-## 🙏 Acknowledgments
-
-- [CrewAI](https://crewai.com/) - Multi-agent framework
-- [LangChain](https://langchain.com/) - LLM orchestration
-- [ChromaDB](https://www.trychroma.com/) - Embedded vector database
-- [rank-bm25](https://github.com/dorianbrown/rank_bm25) - BM25 for BM25 hybrid search
-- [Kuzu](https://kuzu.com/) - Graph database
-- [Qwen](https://qwenlm.github.io/) - LLM models
-- [BAAI BGE](https://github.com/FlagOpen/FlagEmbedding) - Embedding models
-
----
-
-## 📞 Support
-
-- **Issues**: [GitHub Issues](https://github.com/Sam-max1/healthexpert/issues)
-- **LinkedIn DM**: [Sam-max1](https://www.linkedin.com/in/sam-max1)
-- **Documentation**: See [HEALTHEXPERT_ARCHITECTURE_DESIGN.md](HEALTHEXPERT_ARCHITECTURE_DESIGN.md)
+This project is licensed under the MIT License. See [LICENSE](LICENSE) for details.
 
 ---
 
 <div align="center">
 
-**Built with ❤️ for AI-powered document analysis**
+⭐ If you found this project useful, please star the repository and share it with others.
 
 </div>
