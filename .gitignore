@@ -123,8 +123,11 @@ dmypy.json
 .pyre/
 
 # HealthExpert specific
-kbdocs/
 uploads/
+data/
+app/kbdocs/
+app/logs/
+kbdocs/
 app/
 data/chroma_db/
 data/security.key
@@ -132,6 +135,23 @@ data/security.key
 *.sqlite
 .DS_Store
 Thumbs.db
+
+# Security certificates (don't commit private keys)
+cert.pem
+key.pem
+
+# Backup files
+README_OLD.md
+Dockerfile_bak
+*_bak
+*.backup
+
+# Large list files
+qwen_models.txt
+
+# Test artifacts
+test_results.txt
+test_output/
 
 # IDE
 .vscode/
